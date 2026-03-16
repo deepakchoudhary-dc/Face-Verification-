@@ -1,0 +1,59 @@
+# ============================================================
+# CA_Monk v3 — Tier-1 Military-Grade Biometric Intelligence
+# CPU-first, ONNX-optimized, laptop-safe (RTX 3060/4060)
+# ============================================================
+
+# --- Core ---
+numpy>=1.24
+scipy>=1.11
+pandas>=1.5
+pydantic>=2.7
+python-dotenv>=1.0
+
+# --- Image / Video ---
+opencv-python>=4.8
+Pillow>=10.0
+pdf2image>=1.16
+
+# --- Data Handlers ---
+boto3>=1.28
+openpyxl>=3.1
+
+# --- ONNX Runtime (GPU-accelerated, auto-falls back to CPU) ---
+onnxruntime>=1.18
+
+# --- OpenVINO (CPU-optimized AI inference) ---
+openvino>=2025.0
+openvino-genai>=2025.0
+optimum-intel>=1.18
+
+# --- Face Engine (InsightFace + AdaFace ONNX) ---
+insightface>=0.7.3
+
+# --- Reconstruction (Deep3DFaceReconstruction — ResNet50 + BFM09) ---
+# Uses actual Microsoft Deep3DFaceReconstruction (PyTorch successor):
+#   https://github.com/sicxu/Deep3DFaceRecon_pytorch
+# ResNet50 → 257 BFM coefficients → 3D mesh → CPU rendered face
+# No diffusers/SD 1.5 — pure PyTorch + OpenCV pipeline.
+transformers>=4.44
+trimesh>=4.0
+gdown>=5.0
+kornia>=0.7
+
+# --- LLM Reporting (local Ollama model, default qwen3:1.7b) ---
+
+# --- Liveness (rPPG heartbeat extraction) ---
+pyVHR>=2.0
+
+# --- Forensics ---
+mediapipe>=0.10
+
+# --- Visualization (pulse graphs, heatmaps) ---
+matplotlib>=3.7
+
+# --- API (optional, local runs do NOT require Ray) ---
+fastapi>=0.110
+uvicorn>=0.30
+
+# --- PyTorch (REQUIRED for Deep3D ResNet50 reconstruction + F3Net forensics) ---
+torch>=2.2

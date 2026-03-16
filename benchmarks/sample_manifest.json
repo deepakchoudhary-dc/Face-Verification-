@@ -1,0 +1,30 @@
+{
+  "name": "ca_monk_sample_cpu_baseline",
+  "version": "1.0",
+  "threshold_sweep": {
+    "start": 0.35,
+    "stop": 0.95,
+    "step": 0.05,
+    "target_far_max": 0.05
+  },
+  "cases": [
+    {
+      "id": "sample_negative_case",
+      "role": "benchmark_sample_negative",
+      "expected_match": false,
+      "tags": ["negative", "cpu_baseline"],
+      "primary_docs": [
+        {
+          "file_path": "test_data/applicant/primary/image.png",
+          "doc_class": "photo"
+        }
+      ],
+      "comparison_docs": [
+        {
+          "file_path": "test_data/applicant/compare_with/image.png",
+          "doc_class": "photo"
+        }
+      ]
+    }
+  ]
+}

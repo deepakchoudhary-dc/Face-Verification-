@@ -1,0 +1,33 @@
+# Privacy-sensitive artifacts
+evidence_cards/
+forensic_output/
+test_data/
+output.json
+
+# Local environment
+.env
+.env.*
+.venv/
+venv/
+
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Large local model/runtime assets
+models/
+vendor/
+
+# Generated local artifacts
+nul_mesh.obj
+input.json
+input2
+benchmark_results.json
+benchmark_report.md
+benchmark_scores.csv
+
+# IDE/system
+.vscode/
+.DS_Store
+Thumbs.db
