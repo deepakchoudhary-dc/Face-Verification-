@@ -201,6 +201,48 @@ class ReconstructionResponse(BaseModel):
     age_simulation: Dict[str, Any] = Field(default_factory=dict)
 
 
+class ExpressionTransferRequest(BaseModel):
+    source_image_path: str
+    expression_image_path: str
+    evidence_save_path: Optional[str] = None
+    transfer_pose: bool = False
+    expression_preset: Optional[str] = None
+    expression_strength: float = 1.0
+    target_yaw_deg: Optional[float] = None
+    target_pitch_deg: Optional[float] = None
+    target_roll_deg: Optional[float] = None
+    blink_strength: float = 0.15
+    animation_mode: str = "cinematic"
+    animation_frames: int = 18
+    sideview_angle_deg: float = 30.0
+
+
+class ExpressionTransferResponse(BaseModel):
+    generated_image_path: Optional[str] = None
+    rendered_image_path: Optional[str] = None
+    preview_image_path: Optional[str] = None
+    depth_map_path: Optional[str] = None
+    geometry_image_path: Optional[str] = None
+    normal_map_path: Optional[str] = None
+    side_view_image_path: Optional[str] = None
+    mesh_path: Optional[str] = None
+    animation_gif_path: Optional[str] = None
+    animation_keyframes_path: Optional[str] = None
+    teaser_gif_path: Optional[str] = None
+    teaser_keyframes_path: Optional[str] = None
+    turntable_gif_path: Optional[str] = None
+    turntable_keyframes_path: Optional[str] = None
+    source_capture_json_path: Optional[str] = None
+    source_capture_image_path: Optional[str] = None
+    expression_capture_json_path: Optional[str] = None
+    expression_capture_image_path: Optional[str] = None
+    preset_gallery_image_path: Optional[str] = None
+    preset_gallery_json_path: Optional[str] = None
+    suite_json_path: Optional[str] = None
+    warnings: List[str] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
 class ReportRequest(BaseModel):
     applicant_id: str
     biometrics: Dict[str, Any]

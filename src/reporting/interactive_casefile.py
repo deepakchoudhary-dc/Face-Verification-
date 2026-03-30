@@ -58,7 +58,9 @@ class InteractiveCasefileBuilder:
         advanced = comparison.get("advanced_biometrics", {}) or {}
         cross_validation = comparison.get("forensic_3d_cross_validation", {}) or {}
         consistency = cross_validation.get("consistency_analysis", {}) or {}
-        ledger = self._evidence_ledger(match, forensics, document, advanced, consistency)
+        expression_suite = comparison.get("expression_suite", {}) or {}
+        face_evidence = comparison.get("face_evidence", {}) or {}
+        ledger = self._evidence_ledger(match, forensics, document, advanced, consistency, face_evidence)
 
         mesh_text = ""
         mesh_file = evidence_path / "reconstruction_hq_mesh.obj"
@@ -67,6 +69,11 @@ class InteractiveCasefileBuilder:
                 mesh_text = mesh_file.read_text(encoding="utf-8", errors="ignore")
             except Exception:
                 mesh_text = ""
+
+        localized_expression_suite = {
+            key: self._localize_artifact_path(evidence_path, value) if key.endswith("_path") else to_builtin(value)
+            for key, value in expression_suite.items()
+        }
 
         return {
             "filename": comparison.get("filename", "unknown"),
@@ -78,8 +85,12 @@ class InteractiveCasefileBuilder:
             "cross_validation": to_builtin(cross_validation),
             "stage_telemetry": to_builtin(comparison.get("stage_telemetry", []) or []),
             "warnings": list(comparison.get("warnings", []) or []),
-            "dashboard": comparison.get("dashboard"),
-            "reconstruction_path": (comparison.get("reconstruction", {}) or {}).get("generated_image_path"),
+            "dashboard": self._localize_artifact_path(evidence_path, comparison.get("dashboard")),
+            "reconstruction_path": self._localize_artifact_path(
+                evidence_path,
+                (comparison.get("reconstruction", {}) or {}).get("generated_image_path"),
+            ),
+            "expression_suite": to_builtin(localized_expression_suite),
             "report_verdict": report.get("verdict", "UNKNOWN"),
             "threat_level": consistency.get("threat_level", "UNKNOWN"),
             "contradictions": list(consistency.get("contradictions", []) or []),
@@ -90,7 +101,7 @@ class InteractiveCasefileBuilder:
         }
 
     def _artifact_catalog(self, evidence_path: Path) -> List[Dict[str, Any]]:
-        image_exts = {".png", ".jpg", ".jpeg", ".webp"}
+        image_exts = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
         artifacts: List[Dict[str, Any]] = []
         for path in sorted(p for p in evidence_path.iterdir() if p.is_file()):
             suffix = path.suffix.lower()
@@ -104,6 +115,13 @@ class InteractiveCasefileBuilder:
             )
         return artifacts
 
+    @staticmethod
+    def _localize_artifact_path(evidence_path: Path, path: Any) -> Any:
+        if not isinstance(path, str) or not path:
+            return path
+        candidate = evidence_path / Path(path).name
+        return candidate.name if candidate.exists() else path
+
     def _evidence_ledger(
         self,
         match: Dict[str, Any],
@@ -111,6 +129,7 @@ class InteractiveCasefileBuilder:
         document: Dict[str, Any],
         advanced: Dict[str, Any],
         consistency: Dict[str, Any],
+        face_evidence: Dict[str, Any],
     ) -> List[Dict[str, Any]]:
         entries: List[Dict[str, Any]] = []
         model_scores = match.get("model_scores", {}) or {}
@@ -171,6 +190,22 @@ class InteractiveCasefileBuilder:
                 "observation": f"pair_verdict={verdict}, confidence={pair.get('confidence', 0)}",
             }
         )
+        for role in ("primary", "comparison"):
+            payload = (face_evidence.get(role, {}) or {}).get("liveness", {}) or {}
+            state = str(payload.get("signal_state", "unknown"))
+            score = float(payload.get("score", 0.0) or 0.0)
+            entries.append(
+                {
+                    "source": f"face_pad:{role}",
+                    "direction": "risk" if state == "spoof" else "neutral" if state == "indeterminate" else "support",
+                    "impact": 0.16,
+                    "observation": (
+                        f"state={state}, score={score:.4f}, "
+                        f"attack_type={payload.get('attack_type')}, backend={payload.get('backend')}, "
+                        f"indicators={payload.get('attack_indicators')}"
+                    ),
+                }
+            )
         calibration = match.get("calibration_features", {}) or {}
         if calibration:
             entries.append(
@@ -684,6 +719,21 @@ class InteractiveCasefileBuilder:
             f"</article>"
         )
 
+    def _preview_card(self, title: str, path: str | None) -> str:
+        if not path:
+            return ""
+        safe_title = html.escape(title)
+        safe_path = html.escape(str(path))
+        lower = str(path).lower()
+        preview = f'<img src="{safe_path}" alt="{safe_title}">' if lower.endswith((".png", ".jpg", ".jpeg", ".webp", ".gif")) else ""
+        return (
+            f'<article class="artifact">'
+            f'<div class="muted">EXPRESSION SUITE</div>'
+            f'<div><a href="{safe_path}">{safe_title}</a></div>'
+            f"{preview}"
+            f"</article>"
+        )
+
     def _render_comparison(self, index: int, comparison: Dict[str, Any]) -> str:
         match = comparison.get("match", {}) or {}
         report = comparison.get("report", {}) or {}
@@ -717,6 +767,22 @@ class InteractiveCasefileBuilder:
             for item in comparison.get("agreements", [])
         ) or "<li>No agreements recorded.</li>"
         mesh_text = html.escape(str(comparison.get("mesh_text", "")))
+        expression_suite = comparison.get("expression_suite", {}) or {}
+        expression_suite_cards = "".join(
+            [
+                self._preview_card("Expression Transfer Overlay", expression_suite.get("generated_image_path")),
+                self._preview_card("Expression Rendered", expression_suite.get("rendered_image_path")),
+                self._preview_card("Source Capture Card", expression_suite.get("source_capture_image_path")),
+                self._preview_card("Expression Capture Card", expression_suite.get("expression_capture_image_path")),
+                self._preview_card("Preset Gallery", expression_suite.get("preset_gallery_image_path")),
+                self._preview_card("Expression Animation", expression_suite.get("animation_gif_path")),
+                self._preview_card("Animation Keyframes", expression_suite.get("animation_keyframes_path")),
+                self._preview_card("Profile Swing", expression_suite.get("teaser_gif_path")),
+                self._preview_card("Profile Swing Keyframes", expression_suite.get("teaser_keyframes_path")),
+                self._preview_card("Turntable 360", expression_suite.get("turntable_gif_path")),
+                self._preview_card("Turntable Keyframes", expression_suite.get("turntable_keyframes_path")),
+            ]
+        ) or '<div class="muted">Expression suite artifacts were not generated for this comparison.</div>'
         raw_json = html.escape(json.dumps(comparison, indent=2, ensure_ascii=False))
 
         return f"""
@@ -766,7 +832,9 @@ class InteractiveCasefileBuilder:
                     <th>Model</th>
                     <th>Norm</th>
                     <th>Quality</th>
+                    <th>PAD Score</th>
                     <th>PAD State</th>
+                    <th>PAD Attack</th>
                     <th>PAD Backend</th>
                   </tr>
                 </thead>
@@ -776,7 +844,9 @@ class InteractiveCasefileBuilder:
                     <td>{html.escape(str(primary_face.get('model_name', 'unknown')))}</td>
                     <td>{float(primary_face.get('embedding_norm', 0.0) or 0.0):.2f}</td>
                     <td>{html.escape(str(primary_face.get('quality', 'unknown')))}</td>
+                    <td>{float(primary_liveness.get('score', 0.0) or 0.0):.4f}</td>
                     <td>{html.escape(str(primary_liveness.get('signal_state', 'unknown')))}</td>
+                    <td>{html.escape(str(primary_liveness.get('attack_type', 'none')))}</td>
                     <td>{html.escape(str(primary_liveness.get('backend', 'unknown')))}</td>
                   </tr>
                   <tr>
@@ -784,7 +854,9 @@ class InteractiveCasefileBuilder:
                     <td>{html.escape(str(comparison_face.get('model_name', 'unknown')))}</td>
                     <td>{float(comparison_face.get('embedding_norm', 0.0) or 0.0):.2f}</td>
                     <td>{html.escape(str(comparison_face.get('quality', 'unknown')))}</td>
+                    <td>{float(comparison_liveness.get('score', 0.0) or 0.0):.4f}</td>
                     <td>{html.escape(str(comparison_liveness.get('signal_state', 'unknown')))}</td>
+                    <td>{html.escape(str(comparison_liveness.get('attack_type', 'none')))}</td>
                     <td>{html.escape(str(comparison_liveness.get('backend', 'unknown')))}</td>
                   </tr>
                 </tbody>
@@ -825,6 +897,11 @@ class InteractiveCasefileBuilder:
               </thead>
               <tbody>{ledger_rows}</tbody>
             </table>
+          </div>
+
+          <div class="panel">
+            <h2>Expression Suite</h2>
+            <div class="artifact-grid">{expression_suite_cards}</div>
           </div>
 
           <div class="panel">

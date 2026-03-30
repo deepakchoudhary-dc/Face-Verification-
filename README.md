@@ -7,8 +7,8 @@ CA_Monk is a CPU-first forensic face verification pipeline built for evidence-dr
 - Extracts images from applicant and comparison documents.
 - Detects faces and generates CPU-first embeddings with InsightFace plus AdaFace ONNX when available.
 - Runs passive still-image PAD with explicit backend reporting:
-  - `onnx_pad+heuristics` when a local PAD model exists
-  - `heuristic_cpu_pad` otherwise
+  - `onnx_pad+advanced_heuristics` when a local PAD model exists
+  - `advanced_heuristic_cpu_pad` otherwise
 - Runs deepfake and rPPG forensics.
 - Runs advanced biometric analysis, reconstruction, and report generation.
 - Produces a tamper-evident evidence package with:
@@ -53,6 +53,47 @@ CA_Monk is a CPU-first forensic face verification pipeline built for evidence-dr
 - `GET /jobs/{job_id}`
 - `GET /jobs/{job_id}/result`
 
+### Expression Transfer API
+
+- `GET /expression-transfer/capabilities`
+- `POST /expression-transfer`
+
+### Expression Suite API
+
+- `GET /expression-suite/capabilities`
+- `POST /expression-suite`
+
+Example request:
+
+```json
+{
+  "source_image_path": "path/to/source.jpg",
+  "expression_image_path": "path/to/expression.jpg",
+  "transfer_pose": false
+}
+```
+
+This uses the existing Deep3D/BFM coefficients already present in CA_Monk to
+transfer facial expression from one image onto another while leaving the main
+`/process` pipeline unchanged. It writes:
+
+- composited transfer image
+- pure rendered transfer image
+- preview strip
+- depth, geometry, normal, and side-view renders
+- OBJ mesh for MeshLab
+
+The full expression suite extends that with DECA-style capture and animation
+artifacts inspired by DECA's published demo surface:
+
+- source expression capture JSON and visual card
+- donor expression capture JSON and visual card
+- directed preset gallery for review and manual choice
+- interpolation animation GIF and keyframe sheet
+- profile swing GIF and keyframe sheet
+- 360 turntable GIF and keyframe sheet
+- suite manifest JSON for downstream review
+
 ### Benchmark Harness
 
 Run a manifest-driven benchmark:
@@ -73,7 +114,7 @@ The harness now exports threshold sweeps, recommended operating points, confiden
 
 - `src/core/engine.py`: main orchestration
 - `src/face_engine/analyzer.py`: embeddings, PAD, calibrated pair scoring
-- `src/face_engine/liveness.py`: pluggable CPU PAD backend
+- `src/face_engine/liveness.py`: context-aware still-image PAD backend
 - `src/reporting/interactive_casefile.py`: local HTML review surface
 - `src/core/benchmarking.py`: benchmark and threshold analysis
 - `src/api/main.py`: FastAPI entrypoint
@@ -115,10 +156,39 @@ Run the integration script:
 .\.venv\Scripts\python.exe .\run_test.py
 ```
 
+`run_test.py` now also runs the full expression suite as part of the normal
+comparison flow. Alongside the existing forensic outputs, each comparison can
+emit:
+
+- expression transfer overlay and render
+- source and donor capture cards
+- animation GIF
+- teaser repose GIF
+- OBJ mesh
+- suite JSON manifest
+
 Run the API:
 
 ```powershell
 uvicorn src.api.main:app --host 0.0.0.0 --port 8000
+```
+
+Run expression transfer directly from the repo:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_expression_transfer.py --source path\to\source.jpg --expression path\to\expression.jpg
+```
+
+Run the full expression suite directly from the repo:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_expression_suite.py --source path\to\source.jpg --expression path\to\expression.jpg
+```
+
+Example with a directed emotion and side view:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_expression_suite.py --source path\to\source.jpg --expression path\to\expression.jpg --preset laughing --yaw 32 --roll 4 --strength 1.15
 ```
 
 Example request:
@@ -155,6 +225,15 @@ The casefile exposes:
 - face evidence and PAD backend details
 - calibrated match trace
 - local OBJ wireframe viewer for the reconstruction mesh
+
+## Note On DECA
+
+The requested DECA repository was not vendored into this codebase. DECA's
+upstream license is non-commercial research only and is not a clean drop-in fit
+for this repo. Instead, CA_Monk now exposes the requested expression-transfer
+workflow natively through the already-integrated Deep3D/BFM stack, so the
+current working pipeline stays intact and no external DECA dependency is
+required for this feature.
 
 ## Accuracy and Trust
 

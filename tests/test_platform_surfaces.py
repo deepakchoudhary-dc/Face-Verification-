@@ -25,6 +25,7 @@ class InteractiveCasefileTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (evidence_dir / "reconstruction_hq.jpg").write_bytes(b"fake")
+            (evidence_dir / "expression_animation.gif").write_bytes(b"GIF89a")
 
             result = {
                 "role": "subject",
@@ -32,7 +33,7 @@ class InteractiveCasefileTests(unittest.TestCase):
                 "confidence": 41.2,
                 "warnings": ["splice_detected"],
                 "run_metadata": {"run_id": "abc123", "stage_telemetry": []},
-                "runtime_capabilities": {"face_analyzer": {"liveness": {"backend": "heuristic_cpu_pad"}}},
+                "runtime_capabilities": {"face_analyzer": {"liveness": {"backend": "advanced_heuristic_cpu_pad"}}},
                 "comparisons": [
                     {
                         "filename": "comparison.png",
@@ -48,8 +49,13 @@ class InteractiveCasefileTests(unittest.TestCase):
                         "advanced_biometrics": {"pair_analysis": {"final_verdict": "REJECT"}},
                         "forensic_3d_cross_validation": {"consistency_analysis": {"threat_level": "HIGH"}},
                         "face_evidence": {
-                            "primary": {"model_name": "adaface", "embedding_norm": 24.0, "quality": "reliable", "liveness": {"signal_state": "live", "backend": "heuristic_cpu_pad"}},
-                            "comparison": {"model_name": "adaface", "embedding_norm": 23.0, "quality": "reliable", "liveness": {"signal_state": "spoof", "backend": "heuristic_cpu_pad"}},
+                            "primary": {"model_name": "adaface", "embedding_norm": 24.0, "quality": "reliable", "liveness": {"score": 0.82, "signal_state": "live", "attack_type": None, "backend": "advanced_heuristic_cpu_pad"}},
+                            "comparison": {"model_name": "adaface", "embedding_norm": 23.0, "quality": "reliable", "liveness": {"score": 0.19, "signal_state": "spoof", "attack_type": "replay_attack", "backend": "advanced_heuristic_cpu_pad"}},
+                        },
+                        "expression_suite": {
+                            "generated_image_path": "expression_transfer.jpg",
+                            "animation_gif_path": "expression_animation.gif",
+                            "teaser_gif_path": "expression_teaser.gif",
                         },
                         "stage_telemetry": [{"stage": "forensics", "duration_ms": 12.5}],
                     }
@@ -63,9 +69,15 @@ class InteractiveCasefileTests(unittest.TestCase):
             self.assertIn("Evidence Weight Ledger", html_text)
             self.assertIn("Runtime Capabilities", html_text)
             self.assertIn("Face Evidence", html_text)
+            self.assertIn("PAD Score", html_text)
+            self.assertIn("PAD Attack", html_text)
+            self.assertIn("Expression Suite", html_text)
             self.assertIn("mesh-viewer-0", html_text)
             self.assertEqual(data["applicant_role"], "subject")
             self.assertEqual(len(data["comparisons"]), 1)
+            self.assertEqual(data["artifacts"][0]["kind"], "image")
+            self.assertEqual(data["comparisons"][0]["expression_suite"]["animation_gif_path"], "expression_animation.gif")
+            self.assertTrue(any(item["source"] == "face_pad:comparison" for item in data["comparisons"][0]["ledger"]))
 
 
 class BenchmarkHarnessTests(unittest.TestCase):
@@ -103,8 +115,9 @@ class LivenessDetectorTests(unittest.TestCase):
     def test_capabilities_report_fallback_backend_when_model_missing(self):
         detector = LivenessDetector(model_path="models/does_not_exist.onnx")
         caps = detector.capabilities()
-        self.assertEqual(caps["backend"], "heuristic_cpu_pad")
+        self.assertEqual(caps["backend"], "advanced_heuristic_cpu_pad")
         self.assertFalse(caps["model_loaded"])
+        self.assertEqual(caps["analysis_version"], "still_pad_v2")
 
 
 class JobStoreTests(unittest.IsolatedAsyncioTestCase):
@@ -131,7 +144,11 @@ class ApiSurfaceTests(unittest.TestCase):
     def test_capabilities_endpoint_uses_engine_runtime_capabilities(self):
         class _StubEngine:
             def runtime_capabilities(self):
-                return {"face_analyzer": {"liveness": {"backend": "heuristic_cpu_pad"}}}
+                return {
+                    "face_analyzer": {"liveness": {"backend": "advanced_heuristic_cpu_pad"}},
+                    "expression_transfer": {"available": True, "backend": "Deep3DExpressionTransferService"},
+                    "expression_suite": {"available": True, "backend": "Deep3DExpressionSuiteService"},
+                }
 
         with patch("src.api.main.get_engine", return_value=_StubEngine()):
             response = TestClient(app).get("/capabilities")
@@ -139,8 +156,114 @@ class ApiSurfaceTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
             response.json()["runtime_capabilities"]["face_analyzer"]["liveness"]["backend"],
-            "heuristic_cpu_pad",
+            "advanced_heuristic_cpu_pad",
         )
+        self.assertTrue(response.json()["runtime_capabilities"]["expression_transfer"]["available"])
+        self.assertTrue(response.json()["runtime_capabilities"]["expression_suite"]["available"])
+
+    def test_expression_transfer_capabilities_endpoint_uses_engine_runtime_capabilities(self):
+        class _StubService:
+            def capabilities(self):
+                return {
+                    "available": True,
+                    "backend": "Deep3DExpressionTransferService",
+                }
+
+        with patch("src.api.main.get_expression_transfer_service", return_value=_StubService()):
+            response = TestClient(app).get("/expression-transfer/capabilities")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["expression_transfer"]["backend"],
+            "Deep3DExpressionTransferService",
+        )
+
+    def test_expression_transfer_endpoint_delegates_to_engine(self):
+        class _StubService:
+            def generate(self, req):
+                return {
+                    "generated_image_path": req.evidence_save_path or "evidence_cards/expression_transfer/result.jpg",
+                    "metadata": {
+                        "source_image_path": req.source_image_path,
+                        "expression_image_path": req.expression_image_path,
+                        "transfer_pose": req.transfer_pose,
+                    },
+                }
+
+        with patch("src.api.main.get_expression_transfer_service", return_value=_StubService()):
+            response = TestClient(app).post(
+                "/expression-transfer",
+                json={
+                    "source_image_path": "source.jpg",
+                    "expression_image_path": "expression.jpg",
+                    "save_path": "out.jpg",
+                    "transfer_pose": True,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["generated_image_path"], "out.jpg")
+        self.assertTrue(body["metadata"]["transfer_pose"])
+
+    def test_expression_suite_capabilities_endpoint_uses_suite_service(self):
+        class _StubService:
+            def capabilities(self):
+                return {
+                    "available": True,
+                    "backend": "Deep3DExpressionSuiteService",
+                    "available_presets": {"laughing": {"description": "test"}},
+                }
+
+        with patch("src.api.main.get_expression_suite_service", return_value=_StubService()):
+            response = TestClient(app).get("/expression-suite/capabilities")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["expression_suite"]["backend"],
+            "Deep3DExpressionSuiteService",
+        )
+        self.assertIn("laughing", response.json()["expression_suite"]["available_presets"])
+
+    def test_expression_suite_endpoint_returns_animation_payload(self):
+        class _StubService:
+            def generate(self, req):
+                return {
+                    "generated_image_path": req.evidence_save_path or "evidence_cards/expression_suite/result.jpg",
+                    "animation_gif_path": "evidence_cards/expression_suite/result_animation.gif",
+                    "teaser_gif_path": "evidence_cards/expression_suite/result_teaser.gif",
+                    "turntable_gif_path": "evidence_cards/expression_suite/result_turntable.gif",
+                    "preset_gallery_image_path": "evidence_cards/expression_suite/result_gallery.jpg",
+                    "metadata": {
+                        "source_image_path": req.source_image_path,
+                        "expression_image_path": req.expression_image_path,
+                        "transfer_pose": req.transfer_pose,
+                        "expression_preset": req.expression_preset,
+                        "target_yaw_deg": req.target_yaw_deg,
+                    },
+                }
+
+        with patch("src.api.main.get_expression_suite_service", return_value=_StubService()):
+            response = TestClient(app).post(
+                "/expression-suite",
+                json={
+                    "source_image_path": "source.jpg",
+                    "expression_image_path": "expression.jpg",
+                    "save_path": "suite.jpg",
+                    "transfer_pose": False,
+                    "expression_preset": "laughing",
+                    "target_yaw_deg": 32.0,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["generated_image_path"], "suite.jpg")
+        self.assertEqual(body["animation_gif_path"], "evidence_cards/expression_suite/result_animation.gif")
+        self.assertEqual(body["turntable_gif_path"], "evidence_cards/expression_suite/result_turntable.gif")
+        self.assertEqual(body["preset_gallery_image_path"], "evidence_cards/expression_suite/result_gallery.jpg")
+        self.assertEqual(body["metadata"]["expression_preset"], "laughing")
+        self.assertEqual(body["metadata"]["target_yaw_deg"], 32.0)
 
     def test_evidence_verify_endpoint_returns_manifest_validation(self):
         with tempfile.TemporaryDirectory() as tmp:

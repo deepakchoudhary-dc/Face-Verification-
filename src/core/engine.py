@@ -12,6 +12,7 @@ from src.core.contracts import (
     BiometricsRequest,
     DocumentRequest,
     EmbeddingResult,
+    ExpressionTransferRequest,
     ForensicsRequest,
     PairMatchRequest,
     ReconstructionRequest,
@@ -25,6 +26,8 @@ from src.forensics.service import ForensicsService
 from src.biometric_analysis.orchestrator import AdvancedBiometricOrchestrator
 from src.face_engine.visualizer import ForensicVisualizer
 from src.reconstruction.generative import OpenVINOForensicReconstructor
+from src.reconstruction.expression_transfer import Deep3DExpressionTransferService
+from src.reconstruction.expression_suite import Deep3DExpressionSuiteService
 from src.reporting.llm_analyst import LlamaForensicAnalyst
 from src.reporting.interactive_casefile import InteractiveCasefileBuilder
 from src.core.serialization import to_builtin
@@ -71,6 +74,14 @@ class VerificationEngine:
         self.forensics = ForensicsService()
         self.adv_biometrics = AdvancedBiometricOrchestrator()
         self.reconstruction = OpenVINOForensicReconstructor()
+        self.expression_transfer = Deep3DExpressionTransferService(
+            deep3d_provider=lambda: self.reconstruction.deep3d,
+            output_dir=self.OUTPUT_DIR,
+        )
+        self.expression_suite = Deep3DExpressionSuiteService(
+            deep3d_provider=lambda: self.reconstruction.deep3d,
+            output_dir=self.OUTPUT_DIR,
+        )
         self.reporting = LlamaForensicAnalyst()
         self.image_study = PrimaryImageStudy()
         self.visualizer = ForensicVisualizer(output_dir=self.OUTPUT_DIR)
@@ -193,6 +204,8 @@ class VerificationEngine:
             "reconstruction": {
                 "backend": getattr(self.reconstruction, "__class__", type(None)).__name__,
             },
+            "expression_transfer": self.expression_transfer.capabilities(),
+            "expression_suite": self.expression_suite.capabilities(),
             "reporting": {
                 "backend": getattr(self.reporting, "__class__", type(None)).__name__,
                 "llm_available": bool(getattr(self.reporting, "llm_available", False)),
@@ -279,6 +292,42 @@ class VerificationEngine:
             return to_builtin(self.reconstruction.generate(req).model_dump())
         except Exception as exc:
             return {"warnings": [f"reconstruction_failed: {exc}"]}
+
+    def run_expression_transfer(
+        self,
+        source_image_path: str,
+        expression_image_path: str,
+        save_path: Optional[str] = None,
+        transfer_pose: bool = False,
+    ) -> Dict[str, Any]:
+        try:
+            req = ExpressionTransferRequest(
+                source_image_path=source_image_path,
+                expression_image_path=expression_image_path,
+                evidence_save_path=save_path,
+                transfer_pose=transfer_pose,
+            )
+            return to_builtin(self.expression_transfer.generate(req).model_dump())
+        except Exception as exc:
+            return {"warnings": [f"expression_transfer_failed: {exc}"]}
+
+    def run_expression_suite(
+        self,
+        source_image_path: str,
+        expression_image_path: str,
+        save_path: Optional[str] = None,
+        transfer_pose: bool = False,
+    ) -> Dict[str, Any]:
+        try:
+            req = ExpressionTransferRequest(
+                source_image_path=source_image_path,
+                expression_image_path=expression_image_path,
+                evidence_save_path=save_path,
+                transfer_pose=transfer_pose,
+            )
+            return to_builtin(self.expression_suite.generate(req).model_dump())
+        except Exception as exc:
+            return {"warnings": [f"expression_suite_failed: {exc}"]}
 
     @staticmethod
     def _normalize_age_band(aging_features: Dict[str, Any]) -> Tuple[Optional[int], Optional[int], Optional[int]]:
@@ -1128,6 +1177,28 @@ class VerificationEngine:
                 details={"mode": recon_mode},
             )
 
+            # --- Expression Suite (capture + transfer + animation) ---
+            logger.info("Running expression suite (capture + transfer + animation)...")
+            expression_suite_start = time.perf_counter()
+            expression_suite = self.run_expression_suite(
+                source_image_path=primary_face.source_path,
+                expression_image_path=comparison_face.source_path,
+                save_path=os.path.join(evidence_dir, "expression_transfer.jpg"),
+                transfer_pose=False,
+            )
+            self._record_stage(
+                doc_stage_telemetry,
+                "expression_suite",
+                expression_suite_start,
+                status="degraded" if expression_suite.get("warnings") and not expression_suite.get("generated_image_path") else "ok",
+                details={
+                    "has_transfer": bool(expression_suite.get("generated_image_path")),
+                    "has_animation": bool(expression_suite.get("animation_gif_path")),
+                    "has_teaser": bool(expression_suite.get("teaser_gif_path")),
+                },
+            )
+            doc_row["expression_suite"] = expression_suite
+
             # --- Reporting (Chain-of-Thought with deep image study) ---
             logger.info("Generating forensic report with deep image study...")
             reporting_start = time.perf_counter()
@@ -1414,6 +1485,20 @@ class VerificationEngine:
         return await asyncio.to_thread(self.process_applicant, applicant)
 
     def cleanup(self) -> None:
+        try:
+            self.expression_transfer.cleanup()
+        except Exception:
+            pass
+        try:
+            self.expression_suite.cleanup()
+        except Exception:
+            pass
+        deep3d = getattr(self.reconstruction, "_deep3d", None)
+        if deep3d is not None:
+            try:
+                deep3d.cleanup()
+            except Exception:
+                pass
         self.extractor.cleanup()
         self.analyzer.cleanup()
 

@@ -74,7 +74,7 @@ class FaceAnalyzer:
       3. InsightFace buffalo_l detection / alignment
       4. AdaFace ONNX embedding (or InsightFace fallback)
       5. MagFace quality scoring (norm < 22 = Low Fidelity, > 28 = Enrollment Quality)
-      6. Heuristic liveness check
+      6. Context-aware still-image PAD / liveness check
     """
 
     def __init__(
@@ -236,7 +236,11 @@ class FaceAnalyzer:
             if not embeddings:
                 embeddings[model_name] = emb_vec.tolist()
 
-            liveness = self.liveness_detector.check_liveness(crop if crop.size else processed)
+            liveness = self.liveness_detector.check_liveness(
+                crop if crop.size else processed,
+                frame_img=processed,
+                face_box={"x": int(x1), "y": int(y1), "w": int(x2 - x1), "h": int(y2 - y1)},
+            )
 
             # MagFace quality description
             magface_desc = self.recognizer.quality_description(emb_norm)

@@ -63,6 +63,21 @@ def main():
         dash = comp.get("dashboard")
         if dash:
             logger.info("Dashboard saved: %s", dash)
+        expr = comp.get("expression_suite") or {}
+        if expr.get("generated_image_path"):
+            logger.info("Expression transfer image: %s", expr["generated_image_path"])
+        if expr.get("source_capture_image_path"):
+            logger.info("Source capture card: %s", expr["source_capture_image_path"])
+        if expr.get("expression_capture_image_path"):
+            logger.info("Expression capture card: %s", expr["expression_capture_image_path"])
+        if expr.get("preset_gallery_image_path"):
+            logger.info("Expression preset gallery: %s", expr["preset_gallery_image_path"])
+        if expr.get("animation_gif_path"):
+            logger.info("Expression animation GIF: %s", expr["animation_gif_path"])
+        if expr.get("teaser_gif_path"):
+            logger.info("Profile swing GIF: %s", expr["teaser_gif_path"])
+        if expr.get("turntable_gif_path"):
+            logger.info("Turntable 360 GIF: %s", expr["turntable_gif_path"])
     casefile = result.get("interactive_casefile", {}) or {}
     if casefile.get("html_path"):
         logger.info("Interactive casefile: %s", casefile["html_path"])

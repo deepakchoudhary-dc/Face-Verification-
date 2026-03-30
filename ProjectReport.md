@@ -1,4 +1,134 @@
-﻿## How To Run This Project
+## Quick Run Commands
+
+Run all commands from `E:\CA_Monk`.
+
+Your old command still works for the full sample pipeline:
+
+```powershell
+.\.venv\Scripts\python.exe run_test.py
+```
+
+### 1. If `.venv` does not exist yet
+
+```powershell
+python -m venv .venv
+```
+
+### 2. Install Python packages
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+### 3. Optional: install/download local helper models if anything is missing
+
+```powershell
+.\.venv\Scripts\python.exe install_deps.py
+.\.venv\Scripts\python.exe .\scripts\setup_deep3d.py
+```
+
+### 4. Run the complete bundled sample pipeline
+
+```powershell
+.\.venv\Scripts\python.exe run_test.py
+```
+
+Outputs:
+
+- `output.json`
+- `forensic_output\...`
+- interactive casefile HTML
+- reconstruction mesh and dashboard artifacts
+- expression transfer overlay/render
+- expression capture cards and JSON summaries
+- directed preset gallery for review and manual choice
+- expression interpolation GIF and keyframes
+- profile swing GIF and keyframes
+- 360 turntable GIF and keyframes
+- suite manifest JSON
+
+### 5. Start the API server
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn src.api.main:app --host 127.0.0.1 --port 8000
+```
+
+Useful URLs after starting:
+
+- `http://127.0.0.1:8000/docs`
+- `http://127.0.0.1:8000/health`
+- `http://127.0.0.1:8000/capabilities`
+- `http://127.0.0.1:8000/expression-transfer/capabilities`
+- `http://127.0.0.1:8000/expression-suite/capabilities`
+
+### 6. Run the main verification pipeline through the API
+
+```powershell
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/process" -ContentType "application/json" -Body '{"role":"test_subject","primary_docs":[{"file_path":"test_data\\applicant\\primary\\image.png","doc_class":"photo"}],"comparison_docs":[{"file_path":"test_data\\applicant\\compare_with\\image.png","doc_class":"photo"}]}'
+```
+
+### 7. Run expression transfer directly from the terminal
+
+Example with bundled sample images:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_expression_transfer.py --source vendor\Deep3DFaceRecon_pytorch\datasets\examples\000002.jpg --expression vendor\Deep3DFaceRecon_pytorch\datasets\examples\000006.jpg
+```
+
+If you also want to copy the target head pose:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_expression_transfer.py --source vendor\Deep3DFaceRecon_pytorch\datasets\examples\000002.jpg --expression vendor\Deep3DFaceRecon_pytorch\datasets\examples\000006.jpg --transfer-pose
+```
+
+### 8. Run expression transfer through the API
+
+```powershell
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/expression-transfer" -ContentType "application/json" -Body '{"source_image_path":"vendor\\Deep3DFaceRecon_pytorch\\datasets\\examples\\000002.jpg","expression_image_path":"vendor\\Deep3DFaceRecon_pytorch\\datasets\\examples\\000006.jpg","transfer_pose":false}'
+```
+
+### 9. Run the full expression suite directly from terminal
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_expression_suite.py --source vendor\Deep3DFaceRecon_pytorch\datasets\examples\000002.jpg --expression vendor\Deep3DFaceRecon_pytorch\datasets\examples\000006.jpg
+```
+
+With pose transfer too:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_expression_suite.py --source vendor\Deep3DFaceRecon_pytorch\datasets\examples\000002.jpg --expression vendor\Deep3DFaceRecon_pytorch\datasets\examples\000006.jpg --transfer-pose
+```
+
+If you want a more directed result, for example laughing in side view:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_expression_suite.py --source vendor\Deep3DFaceRecon_pytorch\datasets\examples\000002.jpg --expression vendor\Deep3DFaceRecon_pytorch\datasets\examples\000006.jpg --preset laughing --yaw 32 --roll 4 --strength 1.15
+```
+
+If you want a frightened side-view style:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_expression_suite.py --source vendor\Deep3DFaceRecon_pytorch\datasets\examples\000002.jpg --expression vendor\Deep3DFaceRecon_pytorch\datasets\examples\000006.jpg --preset frightened --yaw 28 --pitch 3 --strength 1.05
+```
+
+### 10. Run the full expression suite through the API
+
+```powershell
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/expression-suite" -ContentType "application/json" -Body '{"source_image_path":"vendor\\Deep3DFaceRecon_pytorch\\datasets\\examples\\000002.jpg","expression_image_path":"vendor\\Deep3DFaceRecon_pytorch\\datasets\\examples\\000006.jpg","transfer_pose":false}'
+```
+
+Directed API example:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/expression-suite" -ContentType "application/json" -Body '{"source_image_path":"vendor\\Deep3DFaceRecon_pytorch\\datasets\\examples\\000002.jpg","expression_image_path":"vendor\\Deep3DFaceRecon_pytorch\\datasets\\examples\\000006.jpg","expression_preset":"laughing","target_yaw_deg":32,"target_roll_deg":4,"expression_strength":1.15,"transfer_pose":false}'
+```
+
+### 11. Stop the API server
+
+Press `Ctrl+C`.
+
+## How To Run This Project
 
 > Status note
 >
