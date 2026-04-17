@@ -210,6 +210,12 @@ class AdvancedBiometricOrchestrator:
         spoof = iris.get("anti_spoofing", {})
         if spoof.get("contact_lens_detected") or not spoof.get("is_real_eye", True):
             score += self.THREAT_WEIGHTS["iris"]
+        sclera = iris.get("sclera_analysis", {})
+        if sclera.get("deepfake_suspected"):
+            score += self.THREAT_WEIGHTS["iris"] * max(
+                0.2,
+                float(sclera.get("ai_noise_probability", 0.0))
+            )
 
         # Low uniqueness = might be generic/generated face
         uniq = result.get("uniqueness", {})

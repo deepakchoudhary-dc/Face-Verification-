@@ -302,15 +302,16 @@ class Deep3DExpressionSuiteService(Deep3DExpressionTransferService):
 
         return canvas
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def _render_coefficients(
         self,
         base_result: Dict[str, Any],
         coefficients: np.ndarray,
         output_size: int = 512,
     ) -> Dict[str, Any]:
-        coeff_tensor = torch.from_numpy(np.asarray(coefficients, dtype=np.float32)).unsqueeze(0).to(self.deep3d.device)
-        recon = self.deep3d.bfm.reconstruct(coeff_tensor)
+        deep3d = self.deep3d
+        coeff_tensor = torch.from_numpy(np.asarray(coefficients, dtype=np.float32)).unsqueeze(0).to(deep3d.device)
+        recon = deep3d.bfm.reconstruct(coeff_tensor)
 
         verts_cam = recon["face_vertex"][0].detach().cpu().numpy()
         colors = recon["face_color"][0].detach().cpu().numpy()
@@ -319,13 +320,15 @@ class Deep3DExpressionSuiteService(Deep3DExpressionTransferService):
         if isinstance(face_buf, torch.Tensor):
             face_buf = face_buf.detach().cpu().numpy()
 
-        render_224 = self.deep3d.renderer.render(
-            verts_cam, face_buf, colors, normals, output_size=224
-        )
-        render_main = self.deep3d.renderer.render(
+        render_main = deep3d.renderer.render(
             verts_cam, face_buf, colors, normals, output_size=output_size
         )
-        side_view = self.deep3d.renderer.render_rotated(
+        rendered_224 = cv2.resize(
+            render_main["rendered"],
+            (224, 224),
+            interpolation=cv2.INTER_AREA,
+        )
+        side_view = deep3d.renderer.render_rotated(
             verts_cam,
             face_buf,
             colors,
@@ -352,7 +355,7 @@ class Deep3DExpressionSuiteService(Deep3DExpressionTransferService):
 
         return {
             "rendered": render_main["rendered"],
-            "rendered_224": render_224["rendered"],
+            "rendered_224": rendered_224,
             "overlay": overlay,
             "depth_colored": depth_colored,
             "geometry": render_main["geometry"],

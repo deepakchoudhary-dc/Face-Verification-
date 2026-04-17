@@ -18,7 +18,7 @@ Techniques:
 
 import cv2
 import numpy as np
-from typing import Dict, List, Tuple, Any
+from typing import Dict, List, Tuple, Any, Optional
 from scipy import ndimage
 from scipy.stats import entropy
 
@@ -44,6 +44,15 @@ class TamperingDetector:
             'lighting_inconsistencies': [],
             'texture_anomalies': [],
             'splicing_indicators': [],
+            'micro_seam_analysis': {
+                'seam_detected': False,
+                'seam_probability': 0.0,
+                'edge_zone_scores': {},
+                'candidate_regions': [],
+                'highlight_box': None,
+                'highlight_box_normalized': None,
+                'summary': 'No micro-seam anomalies detected'
+            },
             'risk_level': 'LOW',
             'detailed_report': ''
         }
@@ -108,6 +117,22 @@ class TamperingDetector:
                 'score': round(edge_score, 2),
                 'discontinuities': edge_issues
             }
+
+            # 8. MICRO-SEAM BOUNDARY ANALYSIS
+            seam_result = self._analyze_micro_seam_boundaries(image, face_box, landmarks)
+            result['micro_seam_analysis'] = seam_result
+            result['feature_analysis']['micro_seam_boundary'] = {
+                'score': round(1 - seam_result.get('seam_probability', 0.0), 2),
+                'seam_detected': seam_result.get('seam_detected', False),
+                'candidate_regions': seam_result.get('candidate_regions', []),
+                'highlight_box': seam_result.get('highlight_box')
+            }
+            if seam_result.get('candidate_regions'):
+                result['splicing_indicators'].append(
+                    f"Micro-seam scan flagged {len(seam_result['candidate_regions'])} boundary region(s)"
+                )
+            if seam_result.get('seam_detected'):
+                result['boundary_anomalies'].append(seam_result.get('summary', 'Micro-seam anomaly detected'))
             
             # CALCULATE OVERALL TAMPERING PROBABILITY
             scores = [
@@ -117,11 +142,12 @@ class TamperingDetector:
                 color_score,
                 noise_score,
                 1 - ghost_score,  # Invert
-                edge_score
+                edge_score,
+                max(0.0, 1 - seam_result.get('seam_probability', 0.0))
             ]
             
-            # Weighted average (boundary and lighting are most indicative)
-            weights = [0.2, 0.2, 0.15, 0.15, 0.1, 0.1, 0.1]
+            # Weighted average (micro-seam signal is additive and intentionally conservative)
+            weights = [0.19, 0.2, 0.15, 0.15, 0.1, 0.1, 0.08, 0.03]
             overall_integrity = sum(s * w for s, w in zip(scores, weights))
             tampering_probability = 1 - overall_integrity
             
@@ -560,6 +586,233 @@ class TamperingDetector:
             issues.append(f"Edge analysis partial: {str(e)}")
             
         return max(continuity_score, 0.0), issues
+
+    def _resolve_local_face_box(self, image: np.ndarray, face_box: Optional[Dict]) -> Dict[str, int]:
+        """
+        Resolve a usable face box inside the current image. If the provided box is
+        out-of-frame, fall back to the full crop because advanced biometrics often
+        runs on a pre-cropped face image.
+        """
+        h, w = image.shape[:2]
+        if not face_box:
+            return {'x': 0, 'y': 0, 'w': w, 'h': h}
+
+        x = int(face_box.get('x', 0))
+        y = int(face_box.get('y', 0))
+        bw = int(face_box.get('w', w))
+        bh = int(face_box.get('h', h))
+
+        x1 = max(0, x)
+        y1 = max(0, y)
+        x2 = min(w, x1 + max(1, bw))
+        y2 = min(h, y1 + max(1, bh))
+
+        if x2 - x1 < max(16, w // 5) or y2 - y1 < max(16, h // 5):
+            return {'x': 0, 'y': 0, 'w': w, 'h': h}
+        return {'x': x1, 'y': y1, 'w': x2 - x1, 'h': y2 - y1}
+
+    @staticmethod
+    def _fractional_box(face_box: Dict[str, int], x0: float, y0: float, x1: float, y1: float) -> Dict[str, int]:
+        fx = face_box['x'] + int(round(face_box['w'] * x0))
+        fy = face_box['y'] + int(round(face_box['h'] * y0))
+        fw = max(4, int(round(face_box['w'] * max(0.01, x1 - x0))))
+        fh = max(4, int(round(face_box['h'] * max(0.01, y1 - y0))))
+        return {'x': fx, 'y': fy, 'w': fw, 'h': fh}
+
+    @staticmethod
+    def _crop_box(image: np.ndarray, box: Dict[str, int]) -> np.ndarray:
+        x1 = max(0, box['x'])
+        y1 = max(0, box['y'])
+        x2 = min(image.shape[1], x1 + max(1, box['w']))
+        y2 = min(image.shape[0], y1 + max(1, box['h']))
+        if x2 <= x1 or y2 <= y1:
+            return np.empty((0, 0), dtype=image.dtype)
+        return image[y1:y2, x1:x2]
+
+    @staticmethod
+    def _normalized_box(box: Dict[str, int], face_box: Dict[str, int]) -> Dict[str, float]:
+        fw = max(face_box['w'], 1)
+        fh = max(face_box['h'], 1)
+        return {
+            'x': round((box['x'] - face_box['x']) / fw, 4),
+            'y': round((box['y'] - face_box['y']) / fh, 4),
+            'w': round(box['w'] / fw, 4),
+            'h': round(box['h'] / fh, 4),
+        }
+
+    def _analyze_micro_seam_boundaries(
+        self,
+        image: np.ndarray,
+        face_box: Dict,
+        landmarks: Dict = None
+    ) -> Dict[str, Any]:
+        """
+        Scan high-risk seam corridors where a morphed T-zone is commonly stitched
+        onto a legitimate head shell. The detector looks for abrupt changes in
+        Laplacian energy, residual noise variance, and 8x8 blockiness.
+        """
+        result = {
+            'seam_detected': False,
+            'seam_probability': 0.0,
+            'edge_zone_scores': {},
+            'candidate_regions': [],
+            'highlight_box': None,
+            'highlight_box_normalized': None,
+            'summary': 'No micro-seam anomalies detected'
+        }
+
+        try:
+            local_face = self._resolve_local_face_box(image, face_box)
+            face = self._crop_box(image, local_face)
+            if face.size == 0:
+                return result
+
+            gray = cv2.cvtColor(face, cv2.COLOR_BGR2GRAY)
+            gray = cv2.GaussianBlur(gray, (3, 3), 0)
+            lap = cv2.Laplacian(gray, cv2.CV_32F, ksize=3)
+            lap_abs = np.abs(lap)
+            residual = gray.astype(np.float32) - cv2.GaussianBlur(gray, (7, 7), 0).astype(np.float32)
+
+            zones = {
+                'hairline': self._fractional_box(local_face, 0.18, 0.04, 0.82, 0.22),
+                'left_cheek_edge': self._fractional_box(local_face, 0.14, 0.28, 0.34, 0.78),
+                'right_cheek_edge': self._fractional_box(local_face, 0.66, 0.28, 0.86, 0.78),
+                'jawline': self._fractional_box(local_face, 0.22, 0.68, 0.78, 0.92),
+            }
+
+            candidate_regions: List[Dict[str, Any]] = []
+            zone_scores: Dict[str, float] = {}
+
+            for zone_name, zone_box in zones.items():
+                local_zone = {
+                    'x': zone_box['x'] - local_face['x'],
+                    'y': zone_box['y'] - local_face['y'],
+                    'w': zone_box['w'],
+                    'h': zone_box['h'],
+                }
+                zone_img = self._crop_box(gray, local_zone)
+                zone_lap = self._crop_box(lap_abs, local_zone)
+                zone_residual = self._crop_box(residual, local_zone)
+                if zone_img.size == 0 or zone_lap.size == 0 or zone_residual.size == 0:
+                    zone_scores[zone_name] = 0.0
+                    continue
+
+                vertical_split = zone_name in {'left_cheek_edge', 'right_cheek_edge'}
+                if vertical_split:
+                    split = max(4, zone_img.shape[1] // 2)
+                    region_a = zone_img[:, :split]
+                    region_b = zone_img[:, split:]
+                    lap_a = zone_lap[:, :split]
+                    lap_b = zone_lap[:, split:]
+                    noise_a = zone_residual[:, :split]
+                    noise_b = zone_residual[:, split:]
+                    seam_strip = zone_lap[:, max(0, split - 2):min(zone_lap.shape[1], split + 2)]
+                else:
+                    split = max(4, zone_img.shape[0] // 2)
+                    region_a = zone_img[:split, :]
+                    region_b = zone_img[split:, :]
+                    lap_a = zone_lap[:split, :]
+                    lap_b = zone_lap[split:, :]
+                    noise_a = zone_residual[:split, :]
+                    noise_b = zone_residual[split:, :]
+                    seam_strip = zone_lap[max(0, split - 2):min(zone_lap.shape[0], split + 2), :]
+
+                if region_a.size == 0 or region_b.size == 0:
+                    zone_scores[zone_name] = 0.0
+                    continue
+
+                lap_shift = abs(np.log1p(float(np.var(lap_a))) - np.log1p(float(np.var(lap_b))))
+                noise_shift = abs(np.log1p(float(np.var(noise_a))) - np.log1p(float(np.var(noise_b))))
+                edge_density = float(np.mean(seam_strip > np.percentile(zone_lap, 80)))
+                blockiness = self._measure_blockiness(zone_img)
+                zone_score = min(
+                    1.0,
+                    0.36 * min(lap_shift / 0.45, 1.0)
+                    + 0.29 * min(noise_shift / 0.5, 1.0)
+                    + 0.20 * min(edge_density / 0.18, 1.0)
+                    + 0.15 * min(blockiness / 12.0, 1.0)
+                )
+                zone_score = float(round(zone_score, 4))
+                zone_scores[zone_name] = zone_score
+
+                if zone_score >= 0.52:
+                    candidate = {
+                        'zone': zone_name,
+                        'confidence': round(zone_score * 100, 2),
+                        'box': zone_box,
+                        'box_normalized': self._normalized_box(zone_box, local_face),
+                        'signals': {
+                            'laplacian_shift': round(float(lap_shift), 4),
+                            'noise_shift': round(float(noise_shift), 4),
+                            'edge_density': round(float(edge_density), 4),
+                            'blockiness': round(float(blockiness), 4),
+                        }
+                    }
+                    candidate_regions.append(candidate)
+
+            if zone_scores:
+                ordered_scores = sorted(zone_scores.values(), reverse=True)
+                dominant = ordered_scores[0]
+                support = float(np.mean(ordered_scores[:2])) if len(ordered_scores) > 1 else dominant
+                seam_probability = min(1.0, 0.65 * dominant + 0.35 * support)
+            else:
+                seam_probability = 0.0
+
+            candidate_regions.sort(key=lambda item: item['confidence'], reverse=True)
+            highlight_box = candidate_regions[0]['box'] if candidate_regions else None
+            highlight_box_normalized = candidate_regions[0]['box_normalized'] if candidate_regions else None
+
+            if seam_probability >= 0.62 and candidate_regions:
+                seam_detected = True
+                top_zones = ", ".join(region['zone'] for region in candidate_regions[:2])
+                summary = f"Microscopic seam signature concentrated along {top_zones}"
+            elif candidate_regions:
+                seam_detected = False
+                summary = "Boundary micro-texture drift detected but below hard seam threshold"
+            else:
+                seam_detected = False
+                summary = "No micro-seam anomalies detected"
+
+            result.update({
+                'seam_detected': seam_detected,
+                'seam_probability': round(seam_probability, 4),
+                'edge_zone_scores': {k: round(v, 4) for k, v in zone_scores.items()},
+                'candidate_regions': candidate_regions,
+                'highlight_box': highlight_box,
+                'highlight_box_normalized': highlight_box_normalized,
+                'summary': summary,
+            })
+        except Exception as e:
+            result['summary'] = f"Micro-seam analysis partial: {str(e)}"
+
+        return result
+
+    @staticmethod
+    def _measure_blockiness(region: np.ndarray) -> float:
+        """
+        Approximate JPEG blocking energy by measuring step discontinuities on 8-pixel
+        boundaries relative to the local gradient floor.
+        """
+        if region.size == 0:
+            return 0.0
+        region = region.astype(np.float32)
+        vertical = []
+        horizontal = []
+        for idx in range(8, region.shape[1], 8):
+            vertical.append(float(np.mean(np.abs(region[:, idx] - region[:, idx - 1]))))
+        for idx in range(8, region.shape[0], 8):
+            horizontal.append(float(np.mean(np.abs(region[idx, :] - region[idx - 1, :]))))
+
+        boundary_energy = 0.0
+        if vertical:
+            boundary_energy += float(np.mean(vertical))
+        if horizontal:
+            boundary_energy += float(np.mean(horizontal))
+
+        grad_x = np.mean(np.abs(np.diff(region, axis=1))) if region.shape[1] > 1 else 0.0
+        grad_y = np.mean(np.abs(np.diff(region, axis=0))) if region.shape[0] > 1 else 0.0
+        baseline = max(1.0, float(grad_x + grad_y))
+        return boundary_energy / baseline
     
     def _generate_report(self, result: Dict) -> str:
         """Generate a human-readable tampering analysis report."""

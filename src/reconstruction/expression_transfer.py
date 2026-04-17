@@ -112,7 +112,7 @@ class Deep3DExpressionTransferService:
         mask_f = cv2.erode(mask_f, kernel, iterations=1)
         return cv2.GaussianBlur(mask_f, (9, 9), 3.0)
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def _render_transfer(
         self,
         source_result: Dict[str, Any],
@@ -128,8 +128,9 @@ class Deep3DExpressionTransferService:
         if transfer_pose:
             source_coeffs[224:227] = expression_coeffs[224:227]
 
-        coeff_tensor = torch.from_numpy(source_coeffs).unsqueeze(0).to(self.deep3d.device)
-        recon = self.deep3d.bfm.reconstruct(coeff_tensor)
+        deep3d = self.deep3d
+        coeff_tensor = torch.from_numpy(source_coeffs).unsqueeze(0).to(deep3d.device)
+        recon = deep3d.bfm.reconstruct(coeff_tensor)
 
         verts_cam = recon["face_vertex"][0].detach().cpu().numpy()
         colors = recon["face_color"][0].detach().cpu().numpy()
@@ -138,13 +139,15 @@ class Deep3DExpressionTransferService:
         if isinstance(face_buf, torch.Tensor):
             face_buf = face_buf.detach().cpu().numpy()
 
-        render_224 = self.deep3d.renderer.render(
-            verts_cam, face_buf, colors, normals, output_size=224
-        )
-        render_512 = self.deep3d.renderer.render(
+        render_512 = deep3d.renderer.render(
             verts_cam, face_buf, colors, normals, output_size=512
         )
-        side_view = self.deep3d.renderer.render_rotated(
+        preview_rendered = cv2.resize(
+            render_512["rendered"],
+            (224, 224),
+            interpolation=cv2.INTER_AREA,
+        )
+        side_view = deep3d.renderer.render_rotated(
             verts_cam,
             face_buf,
             colors,
@@ -171,7 +174,7 @@ class Deep3DExpressionTransferService:
         preview_strip = self._build_preview_strip(
             source_result["aligned_input"],
             expression_result["aligned_input"],
-            render_224["rendered"],
+            preview_rendered,
         )
 
         coeff_dict = {

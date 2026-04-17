@@ -367,6 +367,7 @@ class BiometricAnalysisSuite:
             'face_match_score': face_match_score,
             'age_invariant_match': {},
             'doppelganger_analysis': {},
+            'kinship_analysis': {},
             'marker_comparison': {},
             'morphing_check': {},
             'final_verdict': '',
@@ -386,14 +387,19 @@ class BiometricAnalysisSuite:
             )
             
             # Doppelganger check
-            uniqueness1 = self.doppelganger_detector.analyze_identity_uniqueness(
+            uniqueness1 = features1.get('uniqueness', {}) or self.doppelganger_detector.analyze_identity_uniqueness(
                 image1, face_box1, landmarks1
             )
-            uniqueness2 = self.doppelganger_detector.analyze_identity_uniqueness(
+            uniqueness2 = features2.get('uniqueness', {}) or self.doppelganger_detector.analyze_identity_uniqueness(
                 image2, face_box2, landmarks2
             )
             
             result['doppelganger_analysis'] = self.doppelganger_detector.compare_for_doppelganger(
+                uniqueness1, uniqueness2, face_match_score
+            )
+
+            # Kinship check (additive only; does not override direct identity verdict)
+            result['kinship_analysis'] = self.doppelganger_detector.compare_for_kinship(
                 uniqueness1, uniqueness2, face_match_score
             )
             
@@ -430,6 +436,11 @@ class BiometricAnalysisSuite:
             if result['doppelganger_analysis'].get('is_doppelganger'):
                 negative_signals += 2
                 alerts.append('[WARNING] POSSIBLE DOPPELGANGER')
+
+            # Surface kinship as an investigative clue, not a hidden reject path.
+            if result['kinship_analysis'].get('likely_related'):
+                relation = result['kinship_analysis'].get('relationship_hypothesis', 'possible_close_relative')
+                alerts.append(f"[INFO] KINSHIP SIGNAL: {relation.upper()}")
                 
             # Check marker comparison
             if result['marker_comparison'].get('match_score', 0) > 50:
@@ -459,6 +470,12 @@ class BiometricAnalysisSuite:
             else:
                 result['final_verdict'] = 'MANUAL_REVIEW'
                 result['recommendations'].append('Inconclusive - manual review required')
+
+            if result['kinship_analysis'].get('likely_related'):
+                result['recommendations'].append(
+                    result['kinship_analysis'].get('recommendation')
+                    or 'Close-relative facial structure detected; compare against known related identities'
+                )
                 
             result['recommendations'].extend(alerts)
             

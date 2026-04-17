@@ -49,8 +49,10 @@ class LlamaForensicAnalyst:
         "  Examine advanced_biometrics payload. Report:\n"
         "  - Threat levels (primary, comparison)\n"
         "  - Tampering/morphing/disguise detection results\n"
+        "  - Micro-seam boundary findings and seam box regions if present\n"
         "  - Doppelganger analysis verdict\n"
-        "  - Iris spoofing indicators\n"
+        "  - Kinship / bloodline similarity findings\n"
+        "  - Iris spoofing indicators and sclera vascular AI-noise signals\n"
         "  - Uniqueness score and facial marker count\n"
         "  - Pair verdict and confidence\n"
         "  ANY critical threat level = mandatory FLAGGED verdict.\n\n"
@@ -255,16 +257,28 @@ class LlamaForensicAnalyst:
         morphed = adv_primary.get("morphing", {}).get("is_morphed", False)
         disguised = adv_primary.get("makeup_disguise", {}).get("disguise_detected", False)
         is_doppel = adv_pair.get("doppelganger_analysis", {}).get("is_doppelganger", False)
+        seam = adv_primary.get("tampering", {}).get("micro_seam_analysis", {})
+        seam_prob = float(seam.get("seam_probability", 0.0))
+        seam_regions = len(seam.get("candidate_regions", []))
+        kinship = adv_pair.get("kinship_analysis", {})
+        kinship_prob = float(kinship.get("kinship_probability", 0.0))
+        kinship_label = kinship.get("relationship_hypothesis", "not_indicated")
+        sclera = adv_primary.get("iris", {}).get("sclera_analysis", {})
+        sclera_ai = bool(sclera.get("deepfake_suspected", False))
+        sclera_noise = float(sclera.get("ai_noise_probability", 0.0))
 
         adv_bio_lines = [
             f"Step 5 — ADVANCED BIOMETRICS:",
             f"  Primary threat level: {primary_threat} (score={adv_primary.get('threat_score', 0):.3f})",
             f"  Comparison threat level: {comp_threat} (score={adv_comp.get('threat_score', 0):.3f})",
             f"  Tampering: {'DETECTED' if tampered else 'CLEAR'}",
+            f"  Micro-seam boundary: probability={seam_prob:.3f}, regions={seam_regions}",
             f"  Morphing: {'DETECTED' if morphed else 'CLEAR'}",
             f"  Disguise/Makeup: {'DETECTED' if disguised else 'CLEAR'}",
             f"  Doppelganger: {'SUSPECTED' if is_doppel else 'CLEAR'}",
             f"  Iris spoofing: {'SUSPECTED' if adv_primary.get('iris', {}).get('anti_spoofing', {}).get('contact_lens_detected') else 'CLEAR'}",
+            f"  Sclera vascular AI noise: probability={sclera_noise:.3f}, suspected={sclera_ai}",
+            f"  Kinship signal: {kinship_label}, probability={kinship_prob:.2f}%",
             f"  Uniqueness score: {adv_primary.get('uniqueness', {}).get('uniqueness_score', 0):.2f}",
             f"  Facial markers detected: {adv_primary.get('facial_markers', {}).get('markers_detected', 0)}",
             f"  Pair verdict: {pair_verdict}, confidence: {pair_conf:.2f}%",
@@ -304,7 +318,7 @@ class LlamaForensicAnalyst:
                 f"Cosine={cosine:.3f}, live_state={signal_state}, no spectral anomalies, no splice, "
                 f"biometric threat={primary_threat}. Subject CLEARED with confidence={confidence:.2f}."
             )
-        elif deepfake or splice or live is False or norm < 20.0 or critical_bio_threat or tampered or morphed:
+        elif deepfake or splice or live is False or norm < 20.0 or critical_bio_threat or tampered or morphed or sclera_ai:
             verdict = "FLAGGED"
             confidence = 0.85
             flags = []
@@ -322,6 +336,8 @@ class LlamaForensicAnalyst:
                 flags.append("tampering")
             if morphed:
                 flags.append("morphing-attack")
+            if sclera_ai:
+                flags.append("sclera-ai-noise")
             steps.append(
                 f"Step 7 — RUTHLESS EXECUTIVE SUMMARY: FLAGGED. "
                 f"Red flags: {', '.join(flags)}. "

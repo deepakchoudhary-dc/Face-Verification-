@@ -68,6 +68,17 @@ class IrisAnalyzer:
                 'is_real_eye': True,
                 'liveness_score': 0.0,
                 'contact_lens_detected': False
+            },
+            'sclera_analysis': {
+                'sclera_detected': False,
+                'vessel_density': 0.0,
+                'branching_complexity': 0.0,
+                'topology_consistency': 0.0,
+                'vascular_signature': '',
+                'ai_noise_probability': 0.0,
+                'deepfake_suspected': False,
+                'eye_region_quality': 0.0,
+                'regions_analyzed': 0
             }
         }
         
@@ -103,6 +114,34 @@ class IrisAnalyzer:
                 # 6. ANTI-SPOOFING (Detect printed eyes, screens, contacts)
                 spoof_result = self._check_liveness(image, iris_data)
                 result['anti_spoofing'] = spoof_result
+
+            # 7. SCLERA VASCULAR ANALYSIS
+            sclera_result = self._analyze_sclera_vasculature(image, iris_data, eye_region)
+            result['sclera_analysis'] = sclera_result
+
+            if iris_data['success']:
+                if sclera_result.get('deepfake_suspected'):
+                    result['anti_spoofing']['spoof_indicators'].append(
+                        "Sclera vascular topology inconsistent with a living eye"
+                    )
+                    result['anti_spoofing']['liveness_score'] = max(
+                        0.0,
+                        result['anti_spoofing']['liveness_score'] - 0.15
+                    )
+                result['anti_spoofing']['sclera_vascular_confirmed'] = bool(
+                    sclera_result.get('sclera_detected')
+                )
+                result['anti_spoofing']['ai_noise_suspected'] = bool(
+                    sclera_result.get('deepfake_suspected')
+                )
+                result['anti_spoofing']['liveness_score'] = round(
+                    max(0.0, min(1.0, result['anti_spoofing']['liveness_score'])),
+                    4
+                )
+                result['anti_spoofing']['is_real_eye'] = (
+                    result['anti_spoofing']['liveness_score'] > 0.5
+                    and not result['anti_spoofing'].get('spoof_indicators')
+                )
                 
         except Exception as e:
             result['error'] = str(e)
@@ -558,6 +597,225 @@ class IrisAnalyzer:
             pass
             
         return liveness
+
+    def _analyze_sclera_vasculature(
+        self,
+        image: np.ndarray,
+        iris_data: Dict,
+        eye_region: Dict = None
+    ) -> Dict[str, Any]:
+        """
+        Extract sclera vessel structure from the white of the eye and score whether
+        the vascular topology looks anatomically continuous or synthetic/noisy.
+        """
+        result = {
+            'sclera_detected': False,
+            'vessel_density': 0.0,
+            'branching_complexity': 0.0,
+            'topology_consistency': 0.0,
+            'vascular_signature': '',
+            'ai_noise_probability': 0.0,
+            'deepfake_suspected': False,
+            'eye_region_quality': 0.0,
+            'regions_analyzed': 0,
+            'eye_summaries': []
+        }
+
+        try:
+            if image is None or image.size == 0 or len(image.shape) != 3:
+                return result
+
+            eye_boxes = self._estimate_eye_regions(image, iris_data)
+            region_summaries = []
+            vascular_signatures = []
+
+            for eye_box in eye_boxes:
+                region = self._crop_roi(image, eye_box)
+                if region.size == 0:
+                    continue
+
+                hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
+                lab = cv2.cvtColor(region, cv2.COLOR_BGR2LAB)
+                value = hsv[:, :, 2]
+                saturation = hsv[:, :, 1]
+                lightness = lab[:, :, 0]
+
+                sclera_mask = ((value > 135) & (saturation < 90) & (lightness > 120)).astype(np.uint8) * 255
+                sclera_mask = cv2.morphologyEx(
+                    sclera_mask, cv2.MORPH_OPEN, np.ones((3, 3), dtype=np.uint8)
+                )
+                sclera_mask = cv2.morphologyEx(
+                    sclera_mask, cv2.MORPH_CLOSE, np.ones((5, 5), dtype=np.uint8)
+                )
+                mask_area = int(np.sum(sclera_mask > 0))
+                if mask_area < max(40, region.shape[0] * region.shape[1] // 20):
+                    continue
+
+                b_channel, g_channel, r_channel = cv2.split(region)
+                vessel_raw = cv2.subtract(r_channel, g_channel)
+                vessel_raw = cv2.max(vessel_raw, cv2.subtract(r_channel, b_channel))
+                vessel_raw = cv2.GaussianBlur(vessel_raw, (3, 3), 0)
+                clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4))
+                vessel_enhanced = clahe.apply(vessel_raw)
+                vessel_enhanced = cv2.morphologyEx(
+                    vessel_enhanced, cv2.MORPH_TOPHAT, np.ones((5, 5), dtype=np.uint8)
+                )
+
+                threshold = max(12, int(np.percentile(vessel_enhanced[sclera_mask > 0], 80)))
+                vessel_map = ((vessel_enhanced >= threshold) & (sclera_mask > 0)).astype(np.uint8) * 255
+                vessel_map = cv2.morphologyEx(
+                    vessel_map, cv2.MORPH_OPEN, np.ones((2, 2), dtype=np.uint8)
+                )
+
+                vessel_pixels = int(np.sum(vessel_map > 0))
+                if vessel_pixels == 0:
+                    continue
+
+                density = vessel_pixels / max(mask_area, 1)
+                num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(vessel_map, 8)
+                component_sizes = stats[1:, cv2.CC_STAT_AREA] if num_labels > 1 else np.asarray([], dtype=np.int32)
+                significant_components = component_sizes[component_sizes >= 3]
+
+                neighborhood = cv2.filter2D((vessel_map > 0).astype(np.uint8), -1, np.ones((3, 3), dtype=np.uint8))
+                branch_points = int(np.sum(((vessel_map > 0) & (neighborhood >= 5))))
+                branching_complexity = branch_points / max(vessel_pixels, 1)
+
+                continuity = float(np.mean(significant_components) / max(np.max(component_sizes), 1)) if component_sizes.size else 0.0
+                fragmentation = float((len(component_sizes) - len(significant_components)) / max(len(component_sizes), 1)) if component_sizes.size else 1.0
+                topology_consistency = float(
+                    max(
+                        0.0,
+                        min(
+                            1.0,
+                            0.50 * (1.0 - min(abs(density - 0.08) / 0.08, 1.0))
+                            + 0.30 * min(branching_complexity / 0.06, 1.0)
+                            + 0.20 * continuity
+                        )
+                    )
+                )
+                ai_noise_probability = float(
+                    max(
+                        0.0,
+                        min(
+                            1.0,
+                            0.40 * min(abs(density - 0.08) / 0.12, 1.0)
+                            + 0.35 * fragmentation
+                            + 0.25 * (1.0 - topology_consistency)
+                        )
+                    )
+                )
+
+                signature = self._binary_map_signature(vessel_map)
+                vascular_signatures.append(signature)
+                region_quality = min(1.0, (mask_area / max(region.shape[0] * region.shape[1], 1)) * 2.0)
+                region_summaries.append({
+                    'box': eye_box,
+                    'vessel_density': round(density, 4),
+                    'branching_complexity': round(branching_complexity, 4),
+                    'topology_consistency': round(topology_consistency, 4),
+                    'ai_noise_probability': round(ai_noise_probability, 4),
+                    'quality': round(region_quality, 4),
+                })
+
+            if not region_summaries:
+                return result
+
+            density = float(np.mean([item['vessel_density'] for item in region_summaries]))
+            branching = float(np.mean([item['branching_complexity'] for item in region_summaries]))
+            topology = float(np.mean([item['topology_consistency'] for item in region_summaries]))
+            ai_noise = float(np.mean([item['ai_noise_probability'] for item in region_summaries]))
+            quality = float(np.mean([item['quality'] for item in region_summaries]))
+            bilateral_similarity = self._mean_pairwise_signature_similarity(vascular_signatures)
+            if bilateral_similarity is not None:
+                topology = max(0.0, min(1.0, 0.8 * topology + 0.2 * bilateral_similarity))
+                ai_noise = max(0.0, min(1.0, 0.85 * ai_noise + 0.15 * (1.0 - bilateral_similarity)))
+
+            result.update({
+                'sclera_detected': True,
+                'vessel_density': round(density, 4),
+                'branching_complexity': round(branching, 4),
+                'topology_consistency': round(topology, 4),
+                'vascular_signature': "|".join(vascular_signatures[:2]),
+                'ai_noise_probability': round(ai_noise, 4),
+                'deepfake_suspected': ai_noise >= 0.72 and topology <= 0.45,
+                'eye_region_quality': round(quality, 4),
+                'regions_analyzed': len(region_summaries),
+                'eye_summaries': region_summaries
+            })
+        except Exception:
+            pass
+
+        return result
+
+    def _estimate_eye_regions(self, image: np.ndarray, iris_data: Dict) -> List[Dict[str, int]]:
+        """
+        Derive plausible eye ROIs. If a valid iris center exists, use a pair of boxes
+        around it; otherwise fall back to anthropometric face-strip estimates.
+        """
+        h, w = image.shape[:2]
+        iris_center = iris_data.get('iris_center')
+        iris_radius = int(iris_data.get('iris_radius', 0) or 0)
+        eye_boxes: List[Dict[str, int]] = []
+
+        if iris_center and iris_radius > 0:
+            cx, cy = int(iris_center[0]), int(iris_center[1])
+            half_w = max(iris_radius * 2, w // 8)
+            half_h = max(int(iris_radius * 1.3), h // 12)
+            eye_boxes.append(self._clip_box({
+                'x': cx - half_w,
+                'y': cy - half_h,
+                'w': half_w,
+                'h': half_h * 2
+            }, w, h))
+            mirrored_cx = w - cx
+            eye_boxes.append(self._clip_box({
+                'x': mirrored_cx - half_w,
+                'y': cy - half_h,
+                'w': half_w,
+                'h': half_h * 2
+            }, w, h))
+            return eye_boxes
+
+        eye_w = max(20, w // 4)
+        eye_h = max(12, h // 6)
+        y = max(0, int(h * 0.18))
+        left_x = max(0, int(w * 0.12))
+        right_x = max(0, int(w * 0.58))
+        eye_boxes.append(self._clip_box({'x': left_x, 'y': y, 'w': eye_w, 'h': eye_h}, w, h))
+        eye_boxes.append(self._clip_box({'x': right_x, 'y': y, 'w': eye_w, 'h': eye_h}, w, h))
+        return eye_boxes
+
+    @staticmethod
+    def _clip_box(box: Dict[str, int], width: int, height: int) -> Dict[str, int]:
+        x = max(0, int(box['x']))
+        y = max(0, int(box['y']))
+        w = max(1, min(int(box['w']), width - x))
+        h = max(1, min(int(box['h']), height - y))
+        return {'x': x, 'y': y, 'w': w, 'h': h}
+
+    @staticmethod
+    def _crop_roi(image: np.ndarray, box: Dict[str, int]) -> np.ndarray:
+        return image[box['y']:box['y'] + box['h'], box['x']:box['x'] + box['w']]
+
+    @staticmethod
+    def _binary_map_signature(binary_map: np.ndarray) -> str:
+        resized = cv2.resize(binary_map, (12, 12), interpolation=cv2.INTER_AREA)
+        bits = (resized > 0).flatten()
+        bit_string = ''.join('1' if b else '0' for b in bits)
+        return hex(int(bit_string, 2))[2:].zfill(36)
+
+    @staticmethod
+    def _mean_pairwise_signature_similarity(signatures: List[str]) -> Optional[float]:
+        if len(signatures) < 2:
+            return None
+        scores = []
+        for i in range(len(signatures)):
+            for j in range(i + 1, len(signatures)):
+                a = bin(int(signatures[i], 16))[2:].zfill(len(signatures[i]) * 4)
+                b = bin(int(signatures[j], 16))[2:].zfill(len(signatures[j]) * 4)
+                diff = sum(ch1 != ch2 for ch1, ch2 in zip(a, b))
+                scores.append(1.0 - diff / max(len(a), 1))
+        return float(np.mean(scores)) if scores else None
     
     def _calculate_iris_quality(self, image: np.ndarray, cx: int, cy: int, 
                                 pupil_r: int, iris_r: int) -> float:

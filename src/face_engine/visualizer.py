@@ -78,7 +78,7 @@ class ForensicVisualizer:
         self._draw_header(canvas, applicant_id, match_data)
 
         # === LEFT PANEL: Input Images (x=20, y=90) ===
-        self._draw_input_panel(canvas, img1, img2, face1_box, face2_box, match_data)
+        self._draw_input_panel(canvas, img1, img2, face1_box, face2_box, match_data, advanced_biometrics)
 
         # === CENTER PANEL: Forensic Overlays (x=520, y=90) ===
         self._draw_forensic_panel(
@@ -174,6 +174,7 @@ class ForensicVisualizer:
         img1: np.ndarray, img2: np.ndarray,
         face1_box: dict, face2_box: dict,
         match_data: dict,
+        advanced_biometrics: dict = None,
     ) -> None:
         panel_x, panel_y = 10, 90
         panel_w, panel_h = 490, 590
@@ -256,6 +257,9 @@ class ForensicVisualizer:
                     cx_end = min(cx + crop_size, canvas.shape[1])
                     canvas[crop_y:cy_end, cx:cx_end] = crop_disp[:cy_end - crop_y, :cx_end - cx]
                     cv2.rectangle(canvas, (cx, crop_y), (cx + crop_size, crop_y + crop_size), box_color, 1)
+                    seam_data = ((advanced_biometrics or {}).get("primary" if label == "PRI" else "comparison", {})
+                                 .get("tampering", {}).get("micro_seam_analysis", {}))
+                    self._draw_micro_seam_box(canvas, cx, crop_y, crop_size, seam_data)
                     cv2.putText(
                         canvas, label, (cx + 3, crop_y + crop_size - 5),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.35, NEON_CYAN, 1,
@@ -660,9 +664,14 @@ class ForensicVisualizer:
                     text = "DETECTED" if detected else "CLEAR"
                 elif key == "iris":
                     spoof = data.get("anti_spoofing", {}) if isinstance(data, dict) else {}
+                    sclera = data.get("sclera_analysis", {}) if isinstance(data, dict) else {}
                     lens = spoof.get("contact_lens_detected", False)
-                    c = NEON_RED if lens else NEON_GREEN
-                    text = "LENS DET" if lens else "CLEAR"
+                    sclera_ai = sclera.get("deepfake_suspected", False)
+                    c = NEON_RED if lens or sclera_ai else NEON_GREEN
+                    if sclera_ai:
+                        text = "SCLERA AI"
+                    else:
+                        text = "LENS DET" if lens else "CLEAR"
                 elif key == "uniqueness":
                     score = data.get("uniqueness_score", 0) if isinstance(data, dict) else 0
                     c = NEON_GREEN if score >= 0.5 else NEON_AMBER if score >= 0.3 else NEON_RED
@@ -712,6 +721,7 @@ class ForensicVisualizer:
         pair_verdict = pair.get("final_verdict", pair.get("verdict", "N/A"))
         pair_conf = pair.get("confidence", 0)
         is_doppel = pair.get("doppelganger_analysis", {}).get("is_doppelganger", False)
+        kinship = pair.get("kinship_analysis", {})
 
         cv2.putText(
             canvas, "PAIR VERDICT:", (panel_x + 20, pair_y),
@@ -735,10 +745,23 @@ class ForensicVisualizer:
             cv2.FONT_HERSHEY_SIMPLEX, 0.45, d_col, 1, cv2.LINE_AA,
         )
 
+        kinship_y = pair_y + 22
+        kinship_prob = kinship.get("kinship_probability", 0)
+        kinship_label = str(kinship.get("relationship_hypothesis", "not_indicated")).upper()
+        kin_col = NEON_AMBER if kinship.get("likely_related") else DIM_TEXT
+        cv2.putText(
+            canvas, "KINSHIP:", (panel_x + 500, kinship_y),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.42, DIM_TEXT, 1, cv2.LINE_AA,
+        )
+        cv2.putText(
+            canvas, f"{kinship_label} ({kinship_prob:.1f}%)", (panel_x + 620, kinship_y),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.4, kin_col, 1, cv2.LINE_AA,
+        )
+
         # Alerts
         alerts = primary.get("alerts", []) + comparison.get("alerts", [])
         if alerts:
-            alert_y = pair_y + 25
+            alert_y = pair_y + 45
             cv2.putText(
                 canvas, "ALERTS:", (panel_x + 20, alert_y),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.4, NEON_RED, 1, cv2.LINE_AA,
@@ -899,6 +922,36 @@ class ForensicVisualizer:
         cv2.putText(
             canvas, label, (x, y - 5),
             cv2.FONT_HERSHEY_SIMPLEX, 0.35, color, 1, cv2.LINE_AA,
+        )
+
+    @staticmethod
+    def _draw_micro_seam_box(
+        canvas: np.ndarray,
+        offset_x: int,
+        offset_y: int,
+        crop_size: int,
+        seam_data: dict,
+    ) -> None:
+        normalized = seam_data.get("highlight_box_normalized") if isinstance(seam_data, dict) else None
+        if not normalized:
+            return
+
+        x = offset_x + int(normalized.get("x", 0) * crop_size)
+        y = offset_y + int(normalized.get("y", 0) * crop_size)
+        w = max(8, int(normalized.get("w", 0.2) * crop_size))
+        h = max(8, int(normalized.get("h", 0.2) * crop_size))
+
+        for pad, color, thickness in [(4, (0, 0, 120), 1), (2, (0, 0, 180), 1), (0, NEON_RED, 2)]:
+            cv2.rectangle(
+                canvas,
+                (max(0, x - pad), max(0, y - pad)),
+                (min(canvas.shape[1] - 1, x + w + pad), min(canvas.shape[0] - 1, y + h + pad)),
+                color,
+                thickness,
+            )
+        cv2.putText(
+            canvas, "SEAM", (x, max(offset_y + 10, y - 4)),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.3, NEON_RED, 1, cv2.LINE_AA,
         )
 
     @staticmethod
