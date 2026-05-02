@@ -100,6 +100,63 @@ class AdvancedBiometricExtensionTests(unittest.TestCase):
         self.assertIn('kinship_analysis', result)
         self.assertIn('relationship_hypothesis', result['kinship_analysis'])
 
+    def test_strong_match_with_alteration_context_is_not_blunt_reject(self):
+        suite = BiometricAnalysisSuite()
+        face1 = self._make_face_image(0)
+        face2 = self._make_face_image(1)
+        face_box = {'x': 0, 'y': 0, 'w': 140, 'h': 180}
+
+        base_features = {
+            'age_invariant': {},
+            'uniqueness': {'uniqueness_score': 0.8},
+            'facial_markers': {'marker_map': [], 'markers_detected': 0},
+            'makeup_disguise': {'disguise_detected': False, 'disguise_probability': 0.0, 'makeup_level': 'NONE/MINIMAL'},
+            'iris': {'health_indicators': {'cataract_probability': 0.0, 'iris_clarity': 0.8}},
+            'tampering': {},
+            'morphing': {'is_morphed': False, 'morphing_probability': 0.0},
+        }
+        altered_features = {
+            **base_features,
+            'facial_markers': {
+                'marker_map': [],
+                'markers_detected': 1,
+                'scar_analysis': {'scar_count': 1},
+                'injury_signs': [],
+                'surgery_indicators': [{'type': 'possible_rhinoplasty'}],
+            },
+            'makeup_disguise': {
+                'disguise_detected': True,
+                'disguise_probability': 68.0,
+                'makeup_level': 'HEAVY',
+                'analysis': {'prosthetic_indicators': {'prosthetic_probability': 42.0}},
+            },
+            'iris': {'health_indicators': {'cataract_probability': 0.45, 'iris_clarity': 0.35}},
+            'morphing': {'is_morphed': True, 'morphing_probability': 62.0},
+        }
+
+        features_by_id = {id(face1): base_features, id(face2): altered_features}
+        suite.full_analysis = lambda image, *_args, **_kwargs: features_by_id[id(image)]
+        suite.age_analyzer.compare_across_age = lambda *_args, **_kwargs: {
+            'is_same_person': False,
+            'age_invariant_confidence': 35.0,
+        }
+        suite.doppelganger_detector.compare_for_doppelganger = lambda *_args, **_kwargs: {
+            'is_doppelganger': False,
+        }
+        suite.doppelganger_detector.compare_for_kinship = lambda *_args, **_kwargs: {
+            'likely_related': False,
+        }
+        suite.scar_analyzer.compare_markers = lambda *_args, **_kwargs: {
+            'match_score': 0.0,
+            'verdict': 'MARKERS_DIFFER',
+        }
+
+        result = suite.compare_faces(face1, face_box, face2, face_box, 88.0)
+
+        self.assertEqual(result['final_verdict'], 'LIKELY_MATCH_WITH_ALTERATION_REVIEW')
+        self.assertTrue(result['identity_alteration_context']['detected'])
+        self.assertIn('comparison_surgery_indicator', result['identity_alteration_context']['factors'])
+
     def test_report_fallback_mentions_new_advanced_biometric_signals(self):
         analyst = LlamaForensicAnalyst.__new__(LlamaForensicAnalyst)
         verdict, confidence, steps = analyst._fallback(

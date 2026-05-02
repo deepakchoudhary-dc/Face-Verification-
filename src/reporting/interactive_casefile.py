@@ -190,6 +190,48 @@ class InteractiveCasefileBuilder:
                 "observation": f"pair_verdict={verdict}, confidence={pair.get('confidence', 0)}",
             }
         )
+        alteration = pair.get("identity_alteration_context", {}) or {}
+        if alteration.get("detected"):
+            entries.append(
+                {
+                    "source": "advanced_biometrics:alteration_context",
+                    "direction": "neutral",
+                    "impact": 0.12,
+                    "observation": (
+                        f"category={alteration.get('category')}, "
+                        f"factors={alteration.get('factors')}, "
+                        f"face_match_score={alteration.get('face_match_score')}"
+                    ),
+                }
+            )
+        for role in ("primary", "comparison"):
+            side = advanced.get(role, {}) or {}
+            makeup = side.get("makeup_disguise", {}) or {}
+            iris = side.get("iris", {}) or {}
+            markers = side.get("facial_markers", {}) or {}
+            tamper = side.get("tampering", {}) or {}
+            morph = side.get("morphing", {}) or {}
+            seam = tamper.get("micro_seam_analysis", {}) or {}
+            entries.append(
+                {
+                    "source": f"advanced_biometrics:{role}",
+                    "direction": "risk" if (
+                        makeup.get("disguise_detected")
+                        or morph.get("is_morphed")
+                        or tamper.get("tampering_detected")
+                        or seam.get("seam_detected")
+                        or (iris.get("sclera_analysis", {}) or {}).get("deepfake_suspected")
+                    ) else "support",
+                    "impact": 0.12,
+                    "observation": (
+                        f"makeup={makeup.get('makeup_level')}/{makeup.get('disguise_probability')}%, "
+                        f"markers={markers.get('markers_detected')}, "
+                        f"cataract={(iris.get('health_indicators', {}) or {}).get('cataract_probability')}, "
+                        f"seam={seam.get('seam_probability')}, "
+                        f"morph={morph.get('morphing_probability')}"
+                    ),
+                }
+            )
         for role in ("primary", "comparison"):
             payload = (face_evidence.get(role, {}) or {}).get("liveness", {}) or {}
             state = str(payload.get("signal_state", "unknown"))
@@ -783,6 +825,7 @@ class InteractiveCasefileBuilder:
                 self._preview_card("Turntable Keyframes", expression_suite.get("turntable_keyframes_path")),
             ]
         ) or '<div class="muted">Expression suite artifacts were not generated for this comparison.</div>'
+        advanced_feature_rows = self._advanced_feature_rows(comparison.get("advanced_biometrics", {}) or {})
         raw_json = html.escape(json.dumps(comparison, indent=2, ensure_ascii=False))
 
         return f"""
@@ -885,6 +928,21 @@ class InteractiveCasefileBuilder:
           </div>
 
           <div class="panel">
+            <h2>Advanced Feature Matrix</h2>
+            <table>
+              <thead>
+                <tr>
+                  <th>Feature</th>
+                  <th>Primary</th>
+                  <th>Comparison</th>
+                  <th>Pair / Review Meaning</th>
+                </tr>
+              </thead>
+              <tbody>{advanced_feature_rows}</tbody>
+            </table>
+          </div>
+
+          <div class="panel">
             <h2>Evidence Weight Ledger</h2>
             <table>
               <thead>
@@ -921,6 +979,101 @@ class InteractiveCasefileBuilder:
           </div>
         </div>
         """
+
+    def _advanced_feature_rows(self, advanced: Dict[str, Any]) -> str:
+        primary = advanced.get("primary", {}) or {}
+        comparison = advanced.get("comparison", {}) or {}
+        pair = advanced.get("pair_analysis", {}) or {}
+
+        def fmt(value: Any) -> str:
+            if isinstance(value, float):
+                return f"{value:.3f}"
+            return html.escape(str(value))
+
+        def side_summary(side: Dict[str, Any]) -> Dict[str, str]:
+            makeup = side.get("makeup_disguise", {}) or {}
+            markers = side.get("facial_markers", {}) or {}
+            iris = side.get("iris", {}) or {}
+            tamper = side.get("tampering", {}) or {}
+            morph = side.get("morphing", {}) or {}
+            age = side.get("age_invariant", {}) or {}
+            unique = side.get("uniqueness", {}) or {}
+
+            scar_count = ((markers.get("scar_analysis", {}) or {}).get("scar_count", 0))
+            injury_count = len(markers.get("injury_signs", []) or [])
+            surgery_count = len(markers.get("surgery_indicators", []) or [])
+            health = iris.get("health_indicators", {}) or {}
+            sclera = iris.get("sclera_analysis", {}) or {}
+            anti = iris.get("anti_spoofing", {}) or {}
+            seam = tamper.get("micro_seam_analysis", {}) or {}
+
+            return {
+                "Makeup / disguise": (
+                    f"level={makeup.get('makeup_level', 'N/A')}, "
+                    f"probability={float(makeup.get('disguise_probability', 0.0) or 0.0):.1f}%, "
+                    f"detected={bool(makeup.get('disguise_detected', False))}"
+                ),
+                "Scars / injury / surgery": (
+                    f"markers={markers.get('markers_detected', 0)}, scars={scar_count}, "
+                    f"injuries={injury_count}, surgery_indicators={surgery_count}"
+                ),
+                "Iris / cataract / sclera": (
+                    f"cataract={float(health.get('cataract_probability', 0.0) or 0.0):.2f}, "
+                    f"clarity={float(health.get('iris_clarity', 0.0) or 0.0):.2f}, "
+                    f"contact_lens={bool(anti.get('contact_lens_detected', False))}, "
+                    f"sclera_ai={float(sclera.get('ai_noise_probability', 0.0) or 0.0):.2f}"
+                ),
+                "Tamper / seam / morph": (
+                    f"tamper={bool(tamper.get('tampering_detected') or tamper.get('is_tampered'))}, "
+                    f"seam_probability={float(seam.get('seam_probability', 0.0) or 0.0):.2f}, "
+                    f"morph_probability={float(morph.get('morphing_probability', 0.0) or 0.0):.1f}%, "
+                    f"is_morphed={bool(morph.get('is_morphed', False))}"
+                ),
+                "Age / uniqueness": (
+                    f"age_confidence={fmt(age.get('extraction_confidence', 0.0))}, "
+                    f"uniqueness={fmt(unique.get('uniqueness_score', 0.0))}"
+                ),
+            }
+
+        primary_summary = side_summary(primary)
+        comparison_summary = side_summary(comparison)
+        marker_pair = pair.get("marker_comparison", {}) or {}
+        doppel = pair.get("doppelganger_analysis", {}) or {}
+        kinship = pair.get("kinship_analysis", {}) or {}
+        alteration = pair.get("identity_alteration_context", {}) or {}
+        morphing_check = pair.get("morphing_check", {}) or {}
+
+        pair_meaning = {
+            "Makeup / disguise": html.escape(str(alteration.get("summary", "review makeup/disguise effects"))),
+            "Scars / injury / surgery": html.escape(str(marker_pair.get("verdict", "marker comparison unavailable"))),
+            "Iris / cataract / sclera": "Eye-condition signals can degrade direct iris evidence; use stable face and marker signals together.",
+            "Tamper / seam / morph": html.escape(str(morphing_check.get("recommendation", "review morph/tamper risks"))),
+            "Age / uniqueness": (
+                f"doppelganger={bool(doppel.get('is_doppelganger', False))}; "
+                f"kinship={float(kinship.get('kinship_probability', 0.0) or 0.0):.1f}%"
+            ),
+            "Altered appearance context": html.escape(str(alteration.get("reviewer_note", ""))),
+        }
+
+        rows: List[str] = []
+        for feature in ["Makeup / disguise", "Scars / injury / surgery", "Iris / cataract / sclera", "Tamper / seam / morph", "Age / uniqueness"]:
+            rows.append(
+                "<tr>"
+                f"<td>{html.escape(feature)}</td>"
+                f"<td>{html.escape(primary_summary.get(feature, 'n/a'))}</td>"
+                f"<td>{html.escape(comparison_summary.get(feature, 'n/a'))}</td>"
+                f"<td>{pair_meaning.get(feature, '')}</td>"
+                "</tr>"
+            )
+
+        rows.append(
+            "<tr>"
+            "<td>Altered appearance context</td>"
+            f"<td colspan=\"2\">detected={bool(alteration.get('detected', False))}; category={html.escape(str(alteration.get('category', 'none')))}; factors={html.escape(', '.join(alteration.get('factors', []) or []))}</td>"
+            f"<td>{pair_meaning['Altered appearance context']}</td>"
+            "</tr>"
+        )
+        return "".join(rows)
 
     def _render_timeline(self, stages: Iterable[Dict[str, Any]]) -> str:
         stages = list(stages)

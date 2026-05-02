@@ -773,22 +773,109 @@ class ForensicVisualizer:
                     cv2.FONT_HERSHEY_SIMPLEX, 0.35, NEON_RED, 1, cv2.LINE_AA,
                 )
 
-        # Recommendations
+        rec_x = panel_x + 900
+        rec_y = grid_y + 75 + 15
+        cv2.putText(
+            canvas, "FEATURE EVIDENCE:",
+            (rec_x, rec_y),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.45, NEON_CYAN, 1, cv2.LINE_AA,
+        )
+        for text, color in self._feature_evidence_lines(advanced_biometrics)[:9]:
+            rec_y += 16
+            cv2.putText(
+                canvas, f"> {text[:84]}",
+                (rec_x, rec_y),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.32, color, 1, cv2.LINE_AA,
+            )
+
         recs = pair.get("recommendations", [])
         if recs:
-            rec_x = panel_x + 900
-            rec_y = grid_y + 75 + 15
+            rec_y += 20
             cv2.putText(
-                canvas, "RECOMMENDATIONS:", (rec_x, rec_y),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.45, NEON_CYAN, 1, cv2.LINE_AA,
+                canvas, "REVIEW NOTES:", (rec_x, rec_y),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.42, NEON_AMBER, 1, cv2.LINE_AA,
             )
-            for r in recs[:6]:
-                rec_y += 18
-                r_text = r[:70] + "..." if len(r) > 70 else r
+            for r in recs[:3]:
+                rec_y += 16
+                r_text = r[:84] + "..." if len(r) > 84 else r
                 cv2.putText(
                     canvas, f"> {r_text}", (rec_x, rec_y),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, GRAY_TEXT, 1, cv2.LINE_AA,
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.32, GRAY_TEXT, 1, cv2.LINE_AA,
                 )
+
+    @staticmethod
+    def _feature_evidence_lines(advanced_biometrics: dict = None) -> list:
+        if not advanced_biometrics:
+            return [("No advanced biometric feature data available", DIM_TEXT)]
+
+        primary = advanced_biometrics.get("primary", {}) or {}
+        comparison = advanced_biometrics.get("comparison", {}) or {}
+        pair = advanced_biometrics.get("pair_analysis", {}) or {}
+        lines = []
+
+        alt = pair.get("identity_alteration_context", {}) or {}
+        if alt.get("detected"):
+            lines.append((f"ALTERATION: {alt.get('category', 'review')} - {alt.get('summary', '')}", NEON_AMBER))
+        else:
+            lines.append(("ALTERATION: no explicit surgery/injury/makeup/eye degradation context", NEON_GREEN))
+
+        side_rows = []
+        for label, payload in [("PRI", primary), ("CMP", comparison)]:
+            makeup = payload.get("makeup_disguise", {}) or {}
+            markers = payload.get("facial_markers", {}) or {}
+            iris = payload.get("iris", {}) or {}
+            tamper = payload.get("tampering", {}) or {}
+            morph = payload.get("morphing", {}) or {}
+            age = payload.get("age_invariant", {}) or {}
+            unique = payload.get("uniqueness", {}) or {}
+
+            makeup_prob = float(makeup.get("disguise_probability", 0.0) or 0.0)
+            makeup_level = str(makeup.get("makeup_level", "N/A"))
+            makeup_color = NEON_RED if makeup.get("disguise_detected") else NEON_AMBER if makeup_prob >= 30 else NEON_GREEN
+
+            scar_count = int(((markers.get("scar_analysis", {}) or {}).get("scar_count", 0)) or 0)
+            injury_count = len(markers.get("injury_signs", []) or [])
+            surgery_count = len(markers.get("surgery_indicators", []) or [])
+            marker_count = int(markers.get("markers_detected", 0) or 0)
+            marker_color = NEON_AMBER if surgery_count or injury_count else NEON_CYAN if marker_count else DIM_TEXT
+
+            health = iris.get("health_indicators", {}) or {}
+            sclera = iris.get("sclera_analysis", {}) or {}
+            cataract = float(health.get("cataract_probability", 0.0) or 0.0)
+            clarity = float(health.get("iris_clarity", 0.0) or 0.0)
+            sclera_ai = float(sclera.get("ai_noise_probability", 0.0) or 0.0)
+            eye_bad = cataract >= 0.35 or clarity <= 0.45 or sclera.get("deepfake_suspected")
+
+            seam = tamper.get("micro_seam_analysis", {}) or {}
+            seam_prob = float(seam.get("seam_probability", 0.0) or 0.0)
+            morph_prob = float(morph.get("morphing_probability", 0.0) or 0.0)
+            tamper_flag = bool(tamper.get("tampering_detected") or tamper.get("is_tampered") or seam.get("seam_detected"))
+            morph_flag = bool(morph.get("is_morphed"))
+            risk_color = NEON_RED if tamper_flag or morph_flag else NEON_GREEN
+
+            age_conf = float(age.get("extraction_confidence", 0.0) or 0.0)
+            unique_score = float(unique.get("uniqueness_score", 0.0) or 0.0)
+            side_rows.append({
+                "makeup": (f"{label} {makeup_level}/{makeup_prob:.0f}%", makeup_color),
+                "markers": (f"{label} m{marker_count}/s{scar_count}/i{injury_count}/sx{surgery_count}", marker_color),
+                "eye": (f"{label} cat{cataract:.2f}/clar{clarity:.2f}/scl{sclera_ai:.2f}", NEON_AMBER if eye_bad else NEON_GREEN),
+                "risk": (f"{label} seam{seam_prob:.2f}/morph{morph_prob:.0f}%/tamper{tamper_flag}", risk_color),
+                "age": (f"{label} age{age_conf:.2f}/uniq{unique_score:.2f}", GRAY_TEXT),
+            })
+
+        if len(side_rows) == 2:
+            lines.append((f"MAKEUP/DISGUISE: {side_rows[0]['makeup'][0]} | {side_rows[1]['makeup'][0]}", NEON_RED if NEON_RED in (side_rows[0]['makeup'][1], side_rows[1]['makeup'][1]) else NEON_AMBER if NEON_AMBER in (side_rows[0]['makeup'][1], side_rows[1]['makeup'][1]) else NEON_GREEN))
+            lines.append((f"SCARS/INJURY/SURGERY: {side_rows[0]['markers'][0]} | {side_rows[1]['markers'][0]}", NEON_AMBER if NEON_AMBER in (side_rows[0]['markers'][1], side_rows[1]['markers'][1]) else NEON_CYAN))
+            lines.append((f"IRIS/CATARACT/SCLERA: {side_rows[0]['eye'][0]} | {side_rows[1]['eye'][0]}", NEON_AMBER if NEON_AMBER in (side_rows[0]['eye'][1], side_rows[1]['eye'][1]) else NEON_GREEN))
+            lines.append((f"TAMPER/SEAM/MORPH: {side_rows[0]['risk'][0]} | {side_rows[1]['risk'][0]}", NEON_RED if NEON_RED in (side_rows[0]['risk'][1], side_rows[1]['risk'][1]) else NEON_GREEN))
+            lines.append((f"AGE/UNIQUENESS: {side_rows[0]['age'][0]} | {side_rows[1]['age'][0]}", GRAY_TEXT))
+
+        marker_cmp = pair.get("marker_comparison", {}) or {}
+        doppel = pair.get("doppelganger_analysis", {}) or {}
+        kinship = pair.get("kinship_analysis", {}) or {}
+        lines.append((f"PAIR MARKERS: {float(marker_cmp.get('match_score', 0.0) or 0.0):.1f}% - {marker_cmp.get('verdict', 'N/A')}", GRAY_TEXT))
+        lines.append((f"PAIR DOPPELGANGER: {bool(doppel.get('is_doppelganger', False))}, KINSHIP={float(kinship.get('kinship_probability', 0.0) or 0.0):.1f}%", NEON_RED if doppel.get("is_doppelganger") else NEON_AMBER if kinship.get("likely_related") else NEON_GREEN))
+        return lines
 
     # ------------------------------------------------------------------
     # FOOTER: Verdict stamp
@@ -802,11 +889,22 @@ class ForensicVisualizer:
         cv2.line(canvas, (0, footer_y - 5), (self.CANVAS_W, footer_y - 5), HEADER_GOLD, 2)
 
         verified = match_data.get("verified", False)
+        ensemble_conf = float(match_data.get("confidence", 0.0) or 0.0) * 100.0
         pair = (advanced_biometrics or {}).get("pair_analysis", {})
         bio_verdict = pair.get("final_verdict", pair.get("verdict", ""))
+        alteration = pair.get("identity_alteration_context", {}) or {}
+        alteration_review = bool(
+            verified
+            and alteration.get("detected")
+            and ensemble_conf >= 80.0
+            and bio_verdict in {"REJECT", "LIKELY_MATCH_WITH_ALTERATION_REVIEW"}
+        )
 
         # Determine overall decision
-        if verified and bio_verdict not in ("REJECT",):
+        if alteration_review:
+            decision = "LIKELY SAME -- ALTERATION REVIEW"
+            d_color = NEON_AMBER
+        elif verified and bio_verdict not in ("REJECT",):
             decision = "IDENTITY VERIFIED"
             d_color = NEON_GREEN
         elif bio_verdict == "REJECT":
@@ -823,8 +921,6 @@ class ForensicVisualizer:
             cv2.FONT_HERSHEY_SIMPLEX, 0.9, BLACK, 2, cv2.LINE_AA,
         )
 
-        # Ensemble confidence
-        ensemble_conf = float(match_data.get("confidence", 0.0) or 0.0) * 100.0
         cv2.putText(
             canvas, f"ENSEMBLE CONFIDENCE: {ensemble_conf:.2f}%", (580, footer_y + 28),
             cv2.FONT_HERSHEY_SIMPLEX, 0.6, WHITE, 1, cv2.LINE_AA,

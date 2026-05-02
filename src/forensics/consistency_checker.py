@@ -374,6 +374,9 @@ class ForensicConsistencyChecker:
         if verdict in {
             "VERIFIED",
             "LIKELY_MATCH",
+            "LIKELY_MATCH_WITH_ALTERATION_REVIEW",
+            "VERIFIED_WITH_ALTERATION_REVIEW",
+            "SAME_PERSON_WITH_ALTERATION_REVIEW",
             "CONFIRMED_SAME_PERSON",
             "SAME_PERSON",
             "LIKELY_SAME",

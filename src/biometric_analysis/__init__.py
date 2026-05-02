@@ -370,6 +370,7 @@ class BiometricAnalysisSuite:
             'kinship_analysis': {},
             'marker_comparison': {},
             'morphing_check': {},
+            'identity_alteration_context': {},
             'final_verdict': '',
             'confidence': 0.0,
             'recommendations': []
@@ -410,11 +411,17 @@ class BiometricAnalysisSuite:
             
             # Morphing check on document/reference image
             result['morphing_check'] = features2.get('morphing', {})
+
+            result['identity_alteration_context'] = self._identity_alteration_context(
+                features1, features2, face_match_score
+            )
             
             # DETERMINE FINAL VERDICT
             alerts = []
             positive_signals = 0
             negative_signals = 0
+            strong_direct_match = face_match_score >= 75
+            alteration_detected = bool(result['identity_alteration_context'].get('detected'))
             
             # Check face match score
             if face_match_score >= 75:
@@ -448,8 +455,18 @@ class BiometricAnalysisSuite:
                 
             # Check for morphing
             if result['morphing_check'].get('is_morphed'):
-                negative_signals += 3
-                alerts.append('[ALERT] MORPHING ATTACK DETECTED')
+                if strong_direct_match and alteration_detected:
+                    negative_signals += 1
+                    alerts.append('[WARNING] MORPHING-LIKE ARTIFACTS MAY REFLECT ALTERED APPEARANCE')
+                else:
+                    negative_signals += 3
+                    alerts.append('[ALERT] MORPHING ATTACK DETECTED')
+
+            if alteration_detected:
+                alerts.append(
+                    '[INFO] ALTERED APPEARANCE CONTEXT: '
+                    + result['identity_alteration_context'].get('summary', 'appearance alteration indicators detected')
+                )
                 
             # Calculate confidence
             total_signals = positive_signals + negative_signals
@@ -458,7 +475,17 @@ class BiometricAnalysisSuite:
                 result['confidence'] = round(confidence, 2)
                 
             # Final verdict
-            if negative_signals >= 3:
+            if (
+                strong_direct_match
+                and alteration_detected
+                and negative_signals <= 3
+                and positive_signals >= 2
+            ):
+                result['final_verdict'] = 'LIKELY_MATCH_WITH_ALTERATION_REVIEW'
+                result['recommendations'].append(
+                    'Strong face match with alteration indicators; treat as likely same person pending human review'
+                )
+            elif negative_signals >= 3:
                 result['final_verdict'] = 'REJECT'
                 result['recommendations'].append('Identity verification failed - multiple red flags')
             elif positive_signals >= 3 and negative_signals == 0:
@@ -483,3 +510,77 @@ class BiometricAnalysisSuite:
             result['error'] = str(e)
             
         return result
+
+    @staticmethod
+    def _identity_alteration_context(features1: dict, features2: dict, face_match_score: float) -> dict:
+        """
+        Surface appearance-changing conditions so strong direct matches are not
+        silently treated as identity failures when biometrics are degraded.
+        """
+        factors = []
+        evidence = []
+
+        for label, features in [('primary', features1 or {}), ('comparison', features2 or {})]:
+            makeup = features.get('makeup_disguise', {}) or {}
+            makeup_prob = float(makeup.get('disguise_probability', 0.0) or 0.0)
+            makeup_level = str(makeup.get('makeup_level', '') or '').upper()
+            if makeup_prob >= 35 or makeup_level in {'MODERATE', 'HEAVY'}:
+                factors.append(f'{label}_makeup_or_disguise')
+                evidence.append(f'{label}: makeup_level={makeup_level or "UNKNOWN"}, disguise_probability={makeup_prob:.1f}%')
+
+            prosthetic = ((makeup.get('analysis', {}) or {}).get('prosthetic_indicators', {}) or {})
+            prosthetic_prob = float(prosthetic.get('prosthetic_probability', 0.0) or 0.0)
+            if prosthetic_prob >= 35:
+                factors.append(f'{label}_prosthetic_or_implant_indicator')
+                evidence.append(f'{label}: prosthetic_probability={prosthetic_prob:.1f}%')
+
+            markers = features.get('facial_markers', {}) or {}
+            surgery_count = len(markers.get('surgery_indicators', []) or [])
+            injury_count = len(markers.get('injury_signs', []) or [])
+            scar_count = int(((markers.get('scar_analysis', {}) or {}).get('scar_count', 0)) or 0)
+            if surgery_count:
+                factors.append(f'{label}_surgery_indicator')
+                evidence.append(f'{label}: surgery_indicators={surgery_count}')
+            if injury_count or scar_count:
+                factors.append(f'{label}_injury_or_scar_indicator')
+                evidence.append(f'{label}: injury_signs={injury_count}, scars={scar_count}')
+
+            iris = features.get('iris', {}) or {}
+            health = iris.get('health_indicators', {}) or {}
+            cataract_prob = float(health.get('cataract_probability', 0.0) or 0.0)
+            iris_clarity = float(health.get('iris_clarity', 1.0) or 1.0)
+            if cataract_prob >= 0.35:
+                factors.append(f'{label}_cataract_or_eye_opacity')
+                evidence.append(f'{label}: cataract_probability={cataract_prob:.2f}')
+            if iris_clarity <= 0.45:
+                factors.append(f'{label}_low_iris_clarity')
+                evidence.append(f'{label}: iris_clarity={iris_clarity:.2f}')
+
+            sclera = iris.get('sclera_analysis', {}) or {}
+            if sclera.get('deepfake_suspected'):
+                factors.append(f'{label}_sclera_ai_noise')
+                evidence.append(f'{label}: sclera_ai_noise={float(sclera.get("ai_noise_probability", 0.0) or 0.0):.2f}')
+
+        unique_factors = sorted(set(factors))
+        detected = bool(unique_factors)
+        if not detected:
+            category = 'none'
+        elif face_match_score >= 85:
+            category = 'strong_match_with_appearance_change'
+        elif face_match_score >= 75:
+            category = 'probable_match_with_appearance_change'
+        else:
+            category = 'appearance_change_present_but_identity_unresolved'
+
+        return {
+            'detected': detected,
+            'category': category,
+            'face_match_score': round(float(face_match_score or 0.0), 2),
+            'factors': unique_factors,
+            'evidence': evidence[:12],
+            'summary': ', '.join(unique_factors[:5]) if unique_factors else 'none',
+            'reviewer_note': (
+                'Appearance-changing conditions detected; weigh stable embeddings, age-invariant features, markers, and forensic tamper signals together.'
+                if detected else ''
+            )
+        }

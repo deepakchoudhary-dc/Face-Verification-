@@ -46,7 +46,31 @@ class InteractiveCasefileTests(unittest.TestCase):
                         "report": {"verdict": "FLAGGED"},
                         "forensics": {"frequency": {"deepfake_suspected": False}, "rppg": {"signal_state": "not_available"}},
                         "document_intelligence": {"noiseprint": {"suspected_splice": True}},
-                        "advanced_biometrics": {"pair_analysis": {"final_verdict": "REJECT"}},
+                        "advanced_biometrics": {
+                            "primary": {
+                                "makeup_disguise": {"makeup_level": "NONE/MINIMAL", "disguise_probability": 0.0},
+                                "facial_markers": {"markers_detected": 1, "scar_analysis": {"scar_count": 1}},
+                                "iris": {"health_indicators": {"cataract_probability": 0.0, "iris_clarity": 0.8}},
+                                "tampering": {"micro_seam_analysis": {"seam_probability": 0.1}},
+                                "morphing": {"morphing_probability": 0.0},
+                            },
+                            "comparison": {
+                                "makeup_disguise": {"makeup_level": "HEAVY", "disguise_probability": 67.0, "disguise_detected": True},
+                                "facial_markers": {"markers_detected": 2, "surgery_indicators": [{"type": "possible_rhinoplasty"}]},
+                                "iris": {"health_indicators": {"cataract_probability": 0.44, "iris_clarity": 0.35}},
+                                "tampering": {"micro_seam_analysis": {"seam_probability": 0.74}},
+                                "morphing": {"morphing_probability": 32.0},
+                            },
+                            "pair_analysis": {
+                                "final_verdict": "LIKELY_MATCH_WITH_ALTERATION_REVIEW",
+                                "identity_alteration_context": {
+                                    "detected": True,
+                                    "category": "strong_match_with_appearance_change",
+                                    "factors": ["comparison_surgery_indicator"],
+                                    "summary": "comparison_surgery_indicator",
+                                },
+                            },
+                        },
                         "forensic_3d_cross_validation": {"consistency_analysis": {"threat_level": "HIGH"}},
                         "face_evidence": {
                             "primary": {"model_name": "adaface", "embedding_norm": 24.0, "quality": "reliable", "liveness": {"score": 0.82, "signal_state": "live", "attack_type": None, "backend": "advanced_heuristic_cpu_pad"}},
@@ -69,6 +93,8 @@ class InteractiveCasefileTests(unittest.TestCase):
             self.assertIn("Evidence Weight Ledger", html_text)
             self.assertIn("Runtime Capabilities", html_text)
             self.assertIn("Face Evidence", html_text)
+            self.assertIn("Advanced Feature Matrix", html_text)
+            self.assertIn("comparison_surgery_indicator", html_text)
             self.assertIn("PAD Score", html_text)
             self.assertIn("PAD Attack", html_text)
             self.assertIn("Expression Suite", html_text)
@@ -78,6 +104,7 @@ class InteractiveCasefileTests(unittest.TestCase):
             self.assertEqual(data["artifacts"][0]["kind"], "image")
             self.assertEqual(data["comparisons"][0]["expression_suite"]["animation_gif_path"], "expression_animation.gif")
             self.assertTrue(any(item["source"] == "face_pad:comparison" for item in data["comparisons"][0]["ledger"]))
+            self.assertTrue(any(item["source"] == "advanced_biometrics:alteration_context" for item in data["comparisons"][0]["ledger"]))
 
 
 class BenchmarkHarnessTests(unittest.TestCase):

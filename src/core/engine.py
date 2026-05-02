@@ -1371,8 +1371,15 @@ class VerificationEngine:
             contradiction_count = int(consistency.get("contradiction_count", 0) or 0)
             deepfake_flag = bool(first.get("forensics", {}).get("frequency", {}).get("deepfake_suspected", False))
             splice_flag = bool(first.get("document_intelligence", {}).get("noiseprint", {}).get("suspected_splice", False))
+            pair_analysis = (
+                first.get("advanced_biometrics", {})
+                .get("pair_analysis", {})
+                or {}
+            )
+            alteration_context = pair_analysis.get("identity_alteration_context", {}) or {}
 
-            raw_confidence = self._match_confidence_percent(first_match)
+            direct_match_confidence = self._match_confidence_percent(first_match)
+            raw_confidence = direct_match_confidence
             adjusted_confidence = consistency.get("adjusted_confidence")
             if adjusted_confidence is not None:
                 try:
@@ -1380,11 +1387,21 @@ class VerificationEngine:
                 except Exception:
                     pass
 
+            alteration_review_guard = bool(
+                first_match.get("verified", False)
+                and alteration_context.get("detected")
+                and direct_match_confidence >= 80.0
+                and not deepfake_flag
+                and not splice_flag
+                and threat_level == "HIGH"
+                and contradiction_count <= 2
+            )
+
             result["is_match"] = bool(
                 first_match.get("verified", False)
                 and not deepfake_flag
                 and not splice_flag
-                and threat_level not in {"HIGH", "CRITICAL"}
+                and (threat_level not in {"HIGH", "CRITICAL"} or alteration_review_guard)
             )
 
             if contradiction_count:
@@ -1395,9 +1412,21 @@ class VerificationEngine:
                 result.setdefault("warnings", []).append("deepfake_signal_detected_in_comparison_asset")
             if splice_flag:
                 result.setdefault("warnings", []).append("document_splice_signal_detected_in_comparison_asset")
-            if threat_level in {"HIGH", "CRITICAL"}:
+            if threat_level in {"HIGH", "CRITICAL"} and not alteration_review_guard:
                 result.setdefault("warnings", []).append(
                     f"forensic_threat_level_{threat_level.lower()}_overrode_public_match_decision"
+                )
+            if alteration_context.get("detected"):
+                result.setdefault("warnings", []).append(
+                    "appearance_alteration_context_detected_" + str(alteration_context.get("category", "review"))
+                )
+                first.setdefault("warnings", []).append(
+                    "Appearance alteration context detected: "
+                    + str(alteration_context.get("summary", "review stable identity signals"))
+                )
+            if alteration_review_guard:
+                result.setdefault("warnings", []).append(
+                    "high_confidence_match_preserved_with_alteration_review"
                 )
 
             # ---- Cataract / Eye-Condition Aware Adjustment ----

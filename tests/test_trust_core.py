@@ -62,6 +62,25 @@ class TrustCoreTests(unittest.TestCase):
             any("splice_detected=True" in detail for detail in result["contradictions"])
         )
 
+    def test_consistency_checker_treats_alteration_review_as_positive_match_signal(self):
+        checker = ForensicConsistencyChecker()
+
+        result = checker.analyze(
+            match_result={"verified": True, "cosine_similarity": 0.82},
+            forensics_result={"frequency": {"deepfake_suspected": False}},
+            document_result={"noiseprint": {"suspected_splice": False}},
+            adv_biometrics={"pair_analysis": {"final_verdict": "LIKELY_MATCH_WITH_ALTERATION_REVIEW"}},
+            recon_primary={},
+            recon_comparison={},
+        )
+
+        self.assertFalse(
+            any("biometric verdict" in detail.lower() for detail in result["contradictions"])
+        )
+        self.assertTrue(
+            any("biometric verdict=LIKELY_MATCH_WITH_ALTERATION_REVIEW" in detail for detail in result["agreements"])
+        )
+
     def test_match_confidence_percent_prefers_confidence_then_fusion_then_cosine(self):
         self.assertEqual(
             VerificationEngine._match_confidence_percent({"confidence": 0.834}),
