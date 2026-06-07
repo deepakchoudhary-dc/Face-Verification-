@@ -2,6 +2,15 @@
 
 CA_Monk is a CPU-first forensic face verification pipeline built for evidence-driven review, not just single-score matching. It combines face matching, still-image PAD, document forensics, 3D reconstruction, reporting, and evidence packaging into one local workflow.
 
+<img width="1920" height="1080" alt="DASHBOARD_test_subject_20260429_151747" src="https://github.com/user-attachments/assets/d7ec9796-a089-4101-8d1f-54493287cdac" />
+
+NOTE: Images are taken from the web. The images are specifically used for pipeline testing only. If any issues plz write it to dchoudhary2004@gmail.com 
+
+<img width="384" height="384" alt="expression_transfer_animation" src="https://github.com/user-attachments/assets/933e1eb1-0e75-4460-9bcf-97f9c683a4cf" />
+
+This gif is just a example how do the project pipeline transfers the expression from the primary image to the compare to image for better results.
+
+
 ## What It Does
 
 - Extracts images from applicant and comparison documents.
